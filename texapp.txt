@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "texapp";
 	$Texapp_VERSION = "0.2";
-	$Texapp_PATCH_VERSION = 0;
+	$Texapp_PATCH_VERSION = 1;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -6961,6 +6961,7 @@ sub is_json_error {
 		my $dref = &parsejson($data);
 		return $data if (!$dref || ref($dref) ne 'HASH');
 		$dref = $dref->{'meta'};
+		return undef if ($dref->{'code'} eq '200'); # weird
 		return  $dref->{'error_message'} ||
 			$dref->{'error_slug'} ||
 			$dref->{'code'} ||
