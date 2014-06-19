@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.3";
-	$Texapp_PATCH_VERSION = 1;
+	$Texapp_PATCH_VERSION = 2;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -1977,7 +1977,28 @@ if(0) {
 		# and fall through to set
 	}
 
-	# threading
+	# reply-to based threading
+	if (m#^/re(ply)?th(read)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $countmaybe = $3;
+		my $code = lc($4);
+		my $post = &get_original_post($code);
+		my $array_ref = [ ];
+		my $id = $post->{'id'};
+		if (!defined($post) || !length($id)) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+		$countmaybe = (0+$countmaybe) || 10;
+		# follow reply links back until we get to countmaybe
+		while ($countmaybe-- && length($id)) {
+			push(@{ $array_ref }, $post = &get_original_post($id));
+			$id = $post->{'reply_to'};
+		}
+		&dt_tdisplay($array_ref, 'thread', 0, $id);
+		return 0;
+	}
+
+	# thread-id based threading
 	if (m#^/th(read)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $countmaybe = $2;
 		my $code = lc($3);
@@ -3116,7 +3137,8 @@ if(0) {
 			print $stdout "-- could not find user $uname\n";
 			return 0;
 		}
-		&foruuser($u, 1, $m, $uid,
+		my $n = ($m eq 'follow') ? '' : 'un';
+		&foruuser($u, 1, $n, $uid,
 			(($m eq 'follow') ? $followurl : $leaveurl),
 			(($m eq 'follow') ? 'started' : 'stopped'));
 		return 0;
@@ -7147,7 +7169,10 @@ sub parsejson {
 	# in particular, need to make sure nothing in this will eval badly or
 	# run arbitrary code. that would really suck!
 	# first, generate a syntax tree.
-	$tdata = $data;
+	# this is thrown in eval brackets for strange errors @jnm got with
+	# Perl 5.10.
+my $rtn = eval {
+	$tdata = ""+$data;
 	1 while $tdata =~ s/'[^']*'//; # empty strings are valid too ...
 	$tdata =~ s/-?[0-9]+\.?[0-9]*([eE][+-][0-9]+)?//g;
 		# have to handle floats *and* their exponents
@@ -7165,14 +7190,14 @@ sub parsejson {
 				|| ($tdata =~ /^\{/ && $tdata !~ /\}$/)) {
 			# incomplete transmission
 			&$exception(10, "*** JSON warning: connection cut\n");
-			return undef;
+			return 2;
 		}
 # it seems that :[], or :[]} should be accepted as valid in the syntax tree
 # since identica uses this as possible for null properties
 # ,[], shouldn't be, etc.
 		if ($tdata =~ /(^|[^:])\[\]($|[^},])/) { # oddity
 			&$exception(11, "*** JSON warning: null list\n");
-			return undef;
+			return 2;
 		}
 		# at this point all we should have are structural elements.
 		# if something other than JSON structure is visible, then
@@ -7188,7 +7213,7 @@ $data
 $tdata
 --- JSON PARSING ABORTED DUE TO SYNTAX TREE FAILURE --
 EOF
-			return undef;
+			return 2;
 		}
 	}
 
@@ -7197,8 +7222,20 @@ EOF
 	1 while
 	($data =~ s/([^'])'\s*:\s*(true|false|null|\'|\{|\[|-?[0-9])/\1\',\2/);
 
+	# removing whitespace to improve interpretation speed actually made
+	# it SLOWER.
+	#($data =~ s/'\s*,\s*/',/sg);
+	#($data =~ s/\n\s*//sg);
+
 	# finally, single quotes, just before interpretation.
 	$data =~ s/$ssqqmask/\\'/g;
+	return 1;
+};
+	if ($rtn != 1) {
+		return undef if ($rtn == 2); # controlled failure
+		&$exception(98, "*** internal Perl error: $@\n");
+		return undef;
+	}
 
 	# now somewhat validated, so safe (?) to eval() into a Perl struct
 	eval "\$my_json_ref = $data;";
