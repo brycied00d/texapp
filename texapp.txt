@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.5";
-	$Texapp_PATCH_VERSION = 1;
+	$Texapp_PATCH_VERSION = 2;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -57,7 +57,7 @@ BEGIN {
 		synch exception_is_maskable mentions simplestart
 		location readlinerepaint nocounter notifyquiet
 		signals_use_posix dostream nostreamreplies streamallreplies
-		nofilter personal allats savequit
+		nofilter personal allats savequit openappnettoo
 	); %opts_sync = map { $_ => 1 } qw(
 		ansi pause pmpause texappistas verbose superverbose
 		globalurl homeurl notco noifttt chanurl chanbyidurl
@@ -99,7 +99,7 @@ BEGIN {
 		rlurl noprompt shorturl newline wrap verify autosplit
 		notimeline queryurl colourprompt colourme
 		colourpm colourreply colourwarn coloursearch colourlist idurl
-		urlopen delurl notrack favsurl 
+		urlopen delurl notrack favsurl openappnettoo
 		favurl favdelurl slowpost notifies filter colourdefault
 		colourfollow colouralien intsofmeurl blockedurl
 		followurl leaveurl mentions backload blockurl blockdelurl
@@ -546,7 +546,7 @@ if (length($notifytype) && $notifytype ne '0' &&
 
 	%dupenet = ();
 	foreach $nt (split(/\s*,\s*/, $notifytype)) {
-		$fnt="notifier_${nt}";
+		$fnt = ($nt =~ /^notifier_/) ? $nt : "notifier_${nt}";
 		(warn("** duplicate notification $nt was ignored\n"), next)
 			if ($dupenet{$fnt});
 		eval 'return &$fnt(undef)' ||
@@ -622,6 +622,8 @@ binmode(W, ":utf8") unless ($seven);
 
 # ADN only supports ssl
 $http_proto =  'https';
+
+$savequit ||= 0;
 
 $lat ||= undef;
 $long ||= undef;
@@ -728,6 +730,7 @@ $pause = (($anonymous) ? 120 : "auto") if (!defined $pause);
 $superverbose ||= 0;
 $avatar ||= "";
 $urlopen ||= 'echo %U';
+$openappnettoo ||= 0;
 $alsopost ||= "";
 $hold ||= 0;
 $daemon ||= 0;
@@ -3200,7 +3203,8 @@ if(0) {
 		my $mode = $1;
 		my $dof = ($3 eq 'f') ? 1 : 0;
 		my $code = lc($4);
-		unless ($code =~ /^p/ && length($code) > 2) { # this is a PM
+		unless (($code =~ /^P/) || # this is a PM
+				($code =~ /^p/ && length($code) > 2)) {
 			my $post = &get_original_post($code);
 			if (!defined($post)) {
 				print $stdout "-- no such post (yet?): $code\n";
@@ -3228,6 +3232,10 @@ if(0) {
 				print $stdout "-- no such PM (yet?): $code\n";
 				return 0;
 			}
+			if ($mode eq 'v') {
+				print $stdout "-- can't /vreply to PMs\n";
+				return 0;
+			}
 			# tag with the menu code so that splitting works.
 			my $new_context = {
 				'menu_code', $code,
@@ -3242,11 +3250,33 @@ if(0) {
 	# replyall (based on @FunnelFiasco's extension) and replyhighlight
 	# (uses all logic, but puts direct referent in first position and
 	# remainder at rear)
-	if (s#^/(v)?r(eply)?(to)?(al?l?|hi?l?i?t?e?)(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## &&length){
+	if (s#^/(v)?r(eply)?(to)?(al?l?|hi?l?i?t?e?)(f)? ([pP]?[zZ]?[a-zA-Z]?[0-9]+) ## &&length){
 		my $mode = $1;
 		my $appendtype = (substr($4, 0, 1) eq 'a') ? 'a' : 'h';
 		my $dof = ($5 eq 'f') ? 1 : 0;
 		my $code = lc($6);
+
+		# add reply-all logic for PMs, since this is technically valid
+		if (($code =~ /^P/) || ($code =~ /^p/ && length($code) > 2)) {
+			my $context = &get_pm_context($code);
+			if (!defined($context)) {
+				print $stdout "-- no such PM (yet?): $code\n";
+				return 0;
+			}
+			if ($mode eq 'v') {
+				print $stdout "-- can't /vreply to PMs\n";
+				return 0;
+			}
+			print $stdout "-- note: /ra /rh irrelevant on PMs\n";
+			# tag with the menu code so that splitting works.
+			my $new_context = {
+				'menu_code', $code,
+				'context', $context
+			};
+			$rv = &common_split_post($_, undef, $new_context);
+			&pmthump if ($rv && $pmpause);
+			return $rv;
+		}
 
 		# common code from /vreply
 		# we use get_post here, though, so we can include reposters
@@ -5316,11 +5346,11 @@ sub pmscan {
 		sort { $a->{'id'} <=> $b->{'id'} } @{ $ref }
 	;
 	@outarray = @outarray[0..($top-1)] if ($top);
-	@outarray = ($top) ?
+	@outarray =# ($top) ?
 		sort { $a->{'recent_message'}->{'id'}
 			<=> $b->{'recent_message'}->{'id'} } @outarray
-		:
-		sort { $a->{'id'} <=> $b->{'id'} } @outarray
+		#:
+		#sort { $a->{'id'} <=> $b->{'id'} } @outarray
 	;
 	
 	foreach $k (@outarray) {
@@ -5689,7 +5719,8 @@ sub savestate {
 	}
 	# enumerate all variables and -extpref_* variables
 	foreach $key (sort keys %valid) { # not just can_set
-		print B "${key}=$$key\n" if (length($$key));
+		print B "${key}=$$key\n" if (length($$key) &&
+			$key ne 'readline'); # some users may set this
 	}
 	foreach $key (keys %main::) {
 		print B "${key}=${$key}\n" if (length($key) &&
@@ -6539,7 +6570,7 @@ sub defaultautocompletion {
 		return sort grep(/^$qmtext/i, '/history',
 			'/print', '/quit', '/bye', '/again', '/pmagain',
 			'/wagain', '/whois', '/thump', '/pm', '/pmscan',
-			'/refresh', '/dmagain', '/set', '/help', '/pmclose',
+			'/refresh', '/repostsof', '/set', '/help', '/pmclose',
 			'/reply', '/url', '/thread', '/repost', '/replyall',
 			'/replies', '/ruler', '/exit', '/me', '/vcheck',
 			'/orepost', '/erepost', '/frepost', '/liston',
@@ -7084,6 +7115,13 @@ sub generate_shortdomain {
 sub openurl {
 	my $comm = $urlopen;
 	my $url = shift;
+	if (lc($url) eq 'http://app.net' || lc($url) eq 'http://app.net/') {
+		unless ($openappnettoo) {
+			print $stdout
+"-- (incidental app.net link, suppressed, -openappnettoo to disable)\n";
+			return;
+		}
+	}
 	$url = "http://gopher.floodgap.com/gopher/gw?".&url_oauth_sub($url)
 		if ($url =~ m#^gopher://# && $comm !~ /^[^\s]*lynx/);
 	$urlshort = $url;
