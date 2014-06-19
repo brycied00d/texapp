@@ -1,7 +1,7 @@
 #!/usr/bin/perl -s
 #########################################################################
 #
-# Texapp v0.1 (c)2012 cameron kaiser (and contributors).
+# Texapp v0.2 (c)2012 cameron kaiser (and contributors).
 # all rights reserved.
 # http://www.floodgap.com/software/texapp/
 #
@@ -29,7 +29,7 @@ BEGIN {
 	}
 	
 	$command_line = $0; $0 = "texapp";
-	$Texapp_VERSION = "0.1";
+	$Texapp_VERSION = "0.2";
 	$Texapp_PATCH_VERSION = 0;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
@@ -53,20 +53,21 @@ BEGIN {
 	%opts_boolean = map { $_ => 1 } qw(
 		ansi noansi verbose superverbose texappistas noprompt
 		seven silent hold daemon script readline ssl
-		newline vcheck verify noratelimit notrack nonewrts notimeline
+		newline vcheck verify noratelimit notrack nonewrps notimeline
 		synch exception_is_maskable mentions simplestart
 		location readlinerepaint nocounter notifyquiet
 		signals_use_posix dostream nostreamreplies streamallreplies
 		nofilter
 	); %opts_sync = map { $_ => 1 } qw(
 		ansi pause dmpause texappistas verbose superverbose
-		globalurl homeurl
+		globalurl homeurl notco noifttt
 		url rlurl dmurl newline wrap notimeline lists dmidurl
 		queryurl track colourprompt colourme notrack
 		colourdm colourreply colourwarn coloursearch colourlist idurl
 		notifies filter colourdefault backload searchhits dmsenturl
 		nostreamreplies mentions wtrendurl atrendurl filterusers
 		filterats filterrts filteratonly filterflags nofilter
+		colourfollow colouralien
 	); %opts_urls = map {$_ => 1} qw(
 		url dmurl uurl rurl wurl uidurl rlurl update shorturl
 		globalurl homeurl
@@ -90,13 +91,14 @@ BEGIN {
 
 	   %opts_can_set = map { $_ => 1 } qw(
 		url pause dmurl dmpause superverbose ansi verbose
-		globalurl homeurl
+		globalurl homeurl notco noifttt
 		update uurl rurl wurl avatar texappistas track
 		rlurl noprompt shorturl newline wrap verify autosplit
 		notimeline queryurl colourprompt colourme
 		colourdm colourreply colourwarn coloursearch colourlist idurl
 		urlopen delurl notrack dmdelurl favsurl 
 		favurl favdelurl slowpost notifies filter colourdefault
+		colourfollow colouralien
 		followurl leaveurl dmupdate mentions backload
 		lat long location searchhits blockurl blockdelurl woeid
 		nocounter linelength friendsurl followersurl lists
@@ -110,9 +112,9 @@ BEGIN {
 		curl seven silent maxhist noansi hold status
 		daemon timestamp user anonymous script readline
 		leader ssl rc norc vcheck apibase notifytype exts
-		nonewrts synch runcommand bearertoken
+		nonewrps synch runcommand bearertoken
 		credurl keyf readlinerepaint
-		simplestart exception_is_maskable oldperl notco
+		simplestart exception_is_maskable oldperl
 		notify_tool_path oauthurl oauthauthurl oauthaccurl oauthbase
 		signals_use_posix dostream eventbuf streamallreplies
 	); %valid = (%opts_can_set, %opts_others);
@@ -653,10 +655,10 @@ $favsofidurl ||= "${apibase}/posts/%I/stars";
 $rlurl ||= "${apibase}/application/rate_limit_status.json";
 # not supported yet #
 
+$rpurl ||= "${apibase}/posts/%I/repost";
+
 # not supported yet #
-$rturl ||= "${apibase}/statuses/repost";
 $rtsbyurl ||= "${apibase}/statuses/reposts/%I.json";
-# not supported yet #
 
 # not supported yet #
 $dmurl ||= "${apibase}/direct_messages.json";
@@ -742,6 +744,8 @@ $colourdm ||= "GREEN";
 $colourreply ||= "RED";
 $colourwarn ||= "MAGENTA";
 $coloursearch ||= "CYAN";
+$colourfollow ||= "OFF";
+$colouralien ||= "CYAN";
 $colourlist ||= "OFF";
 $colourdefault ||= "OFF";
 $ESC = pack("C", 27);
@@ -773,7 +777,6 @@ $baseagent = $wend;
 #
 $nostream = 1;
 $notrack = 1;
-$nonewrts = 1;
 $dmpause = 0;
 $pause = 20 if ($pause eq 'auto');
 #
@@ -1234,7 +1237,7 @@ sleep 3 unless ($silent);
 
 sub defaultprompt {
 	my $rv = ($noprompt) ? "" : "Texapp> ";
-	my $rvl = ($noprompt) ? 0 : 9;
+	my $rvl = ($noprompt) ? 0 : 8;
 	return ($rv, $rvl) if (shift);
 	$wrapseq = 0;
 	print $stdout "${CCprompt}$rv${OFF}" unless ($termrl);
@@ -1474,7 +1477,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	}
 	# handle variables second, in case they got in history somehow ...
 	$i = 1 if (s/^\%URL\%/$urlshort/ || s/\%URL\%$/$urlshort/);
-	$i = 1 if (s/^\%RT\%/$repost/ || s/\%RT\%$/$repost/);
+	$i = 1 if (s/^\%RP\%/$repost/ || s/\%RP\%$/$repost/);
 
 	# and escaped history
 	s/^\\\%/%/;
@@ -1521,7 +1524,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 		my $id;
 		my @superfields = (
 			[ "user", "username" ], # must always be first
-			[ "reposted_status", "id" ],
+			[ "repost_of", "id" ],
 			[ "user", "geo_enabled" ],
 			[ "tag", "type" ],
 			[ "tag", "payload" ],
@@ -2282,11 +2285,41 @@ EOF
 			print $stdout "-- who follows anonymous anyway?\n";
 			return 0;
 		}
+
+		# fetch the user object and ask it for follows_you
+		my $uname = $2;
+		$readline_completion{'@'.$uname}++ if ($termrl);
+		print $stdout "-- synchronous /doesfollow command for $uname\n"
+			if ($verbose);
+		my $uid = &get_user($uname);
+		if (!length($uid)) {
+			print $stdout "-- could not find user $uname\n";
+			return 0;
+		}
+		my $my_json_ref = &grabjadn(&urlp($wurl, $uid),
+			0, 0, 0, undef, 1);
+
+		if (defined($my_json_ref) && ref($my_json_ref) eq 'HASH' &&
+				length($my_json_ref->{'username'})) {
+			print $stdout "--- does $uname follow you? => ";
+			print $streamout $my_json_ref->{'follows_you'}, "\n";
+		} else {
+			print $stdout "-- failure getting info for $uname\n";
+		}
+		return 0;
+
+		# old code for future use
 		$_ = "/doesfollow $2 $whoami";
 		print $stdout "*** assuming you meant: $_\n";
 		# fall through to ...
 	}
+
+	# doesn't work yet #
 	if (m#^/(df|doesfollow)\s+\@?([^\s]+)\s+\@?([^\s]+)$#) {
+		print $stdout
+"*** sorry, three argument /doesfollow not yet supported\n";
+		return 0;
+
 		my $user_a = $2;
 		my $user_b = $3;
 		if ($user_a =~ m#/# || $user_b =~ m#/#) {
@@ -2391,11 +2424,26 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
 		}
-		my $id = $post->{'id'};
+
+		my $id;
+		my $insert;
+
+		if ($post->{'repost_of'}->{'id'}) {
+			# stick this into the thread as if it were threaded,
+			# but fetch the reposted post instead.
+			$id = $post->{'repost_of'}->{'id'};
+			$insert = $post;
+		} else {
+			$id = $post->{'id'};
+			$insert = undef;
+		}
 		my $json_ref = &grabjadn(&urlp($thurl,,$id), 0, 0, 0, {
 			"type" => "thread",
 			"payload" => $id
 		}, 1);
+		if ($json_ref && ref($json_ref) eq 'ARRAY') {
+			unshift(@{ $json_ref }, $insert) if ($insert);
+		}
 		&dt_tdisplay($json_ref, 'thread', 0, $id);
 		return 0;
 	}
@@ -2650,14 +2698,14 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 			return 0;
 		}
 		# use a native repost unless we can't (or user used /ort /ert)
-		unless ($nonewrts || length || length($mode)) {
+		unless ($nonewrps || length || length($mode)) {
 			# we don't always get rs->text, so we simulate it.
 			my $text = &descape($post->{'text'});
-			$text =~ s/^RT \@[^\s]+:\s+//
-				if ($post->{'reposted_status'}->{'id'});
+			$text =~ s/^(>>|RP) \@[^\s]+:\s+//
+				if ($post->{'repost_of'}->{'id'});
 			print $stdout "-- status reposted\n"
 				unless(&updatest($text, 1, 0, undef,
-					$post->{'reposted_status'}->{'id'}
+					$post->{'repost_of'}->{'id'}
 					|| $post->{'id'}));
 			return 0;
 		}
@@ -2665,10 +2713,12 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 		$repost = ">> @" .
 			&descape($post->{'user'}->{'username'}) .
 			": " . &descape($post->{'text'});
+		$in_reply_to = $post->{'id'};
+		$expected_post_ref = $post;
 		if ($mode eq 'e') {
 			&add_history($repost);
 			print $stdout &wwrap(
-				"-- ok, %RT% and %% are now \"$repost\"\n");
+				"-- ok, %RP% and %% are now \"$repost\"\n");
 			return 0;
 		}
 		$_ = (length) ? "$repost $_" : $repost;
@@ -2686,7 +2736,7 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
 		}
-		$id = $post->{'reposted_status'}->{'id'} ||
+		$id = $post->{'repost_of'}->{'id'} ||
 			$post->{'id'};
 		if (!$id) {
 			print $stdout "-- hmmm, that post is major bogus.\n";
@@ -2709,7 +2759,7 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 	}
 
 	# enable and disable NewRTs from users
-	# we allow this even if newRTs are off from -nonewrts
+	# we allow this even if newRTs are off from -nonewrps
 	if (s#^/rts(on|off)\s+## && length) {
 		&rtsonoffuser($_, 1, ($1 eq 'on'));
 		return 0;
@@ -3637,7 +3687,7 @@ EOF
 			$src =~ s/\|//g; # shouldn't be any anyway.
 			$key = substr(( "$ms ".($key->{'id'})." ".
 		($key->{'reply_to'})." ".
-		($key->{'reposted_status'}->{'id'})." ".
+		($key->{'repost_of'}->{'id'})." ".
 		($key->{'user'}->{'geo_enabled'} || "false") . " ".
 		($key->{'geo'}->{'coordinates'}->[0]). " ".
 		($key->{'geo'}->{'coordinates'}->[1]). " ".
@@ -3646,7 +3696,9 @@ EOF
 		($key->{'num_replies'} || "0"). " " .
 		($key->{'num_stars'} || "0") . " " .
 		($key->{'thread_id'} || "0") . " " .
-		($key->{'repost_count'} || "0") . " " .
+		($key->{'repost_of'}->{'num_reposts'} ||
+			$key->{'num_reposts'} ||
+				"0") . " " .
 		$key->{'user'}->{'username'}." $ds $src|".
 			unpack("${pack_magic}H*", $key->{'text'}).
 			$space_pad), 0, 1024);
@@ -4438,17 +4490,24 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 			# and if the post has a reposted status, do for
 			# that.
 			(&killtw($j), next) if
-				($j->{'reposted_status'} &&
+				($j->{'repost_of'} &&
 				 $filterusers_sub &&
 				&$filterusers_sub(lc(&descape($j->
-					{'reposted_status'}->
+					{'repost_of'}->
 					{'user'}->{'username'}))));
 
 			# second, filterrts. this is almost as fast.
 			(&killtw($j), next) if
 				($filterrts_sub &&
-				 length($j->{'reposted_status'}->{'id'})&&
+				 length($j->{'repost_of'}->{'id'})&&
 				&$filterrts_sub($sn));
+
+			# second-a. get the source, see if this is a blocked
+			# source (-noifttt).
+			my $source = &descape($j->{'source'}->{'name'});
+			(&killtw($j), next) if
+				($noifttt &
+				 $source eq 'IFTTT');
 
 			# third, filteratonly. this has a fast case and a
 			# slow case.
@@ -4462,6 +4521,9 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 			(&killtw($j), next) if
 				($notco &&			# fast test
 				 $tex =~ m#https?://t.co/#);	# slow test
+			(&killtw($j), next) if
+				($notco &&
+				 $tex =~ m#^RT \@#);
 
 			# fifth, filterats. this is somewhat expensive.
 			(&killtw($j), next) if ($filterats_c &&
@@ -4628,14 +4690,14 @@ sub updatest {
 	my $interactive = shift;
 	my $in_reply_to = shift;
 	my $user_name_dm = shift;
-	my $rt_id = shift; # even if this is set, string should also be set.
+	my $rp_id = shift; # even if this is set, string should also be set.
 	my $urle = '';
 	my $i;
 	my $subpid;
 	my $istring;
 
 	my $verb = (length($user_name_dm)) ? "DM $user_name_dm" :
-			($rt_id) ? 'RE-post' :
+			($rp_id) ? 'RE-post' :
 			'post';
 
 	# "the pastebrake"
@@ -4659,7 +4721,7 @@ sub updatest {
 #TODO
 # DM???
 	my $payload = 'text';
-	$string = &$prepost($string) unless ($user_name_dm || $rt_id);
+	$string = &$prepost($string) unless ($user_name_dm || $rp_id);
 
 	# YES, you *can* verify and slowpost. I thought about this and I
 	# think I want to allow it.
@@ -4676,7 +4738,7 @@ sub updatest {
 		}
 	}
 
-	unless ($rt_id) {
+	unless ($rp_id) {
 		$urle = '';
 		foreach $i (unpack("${pack_magic}C*", $string)) {
 			my $k = chr($i);
@@ -4694,15 +4756,15 @@ sub updatest {
 
 	my $i = '';
 	$i .= "reply_to=${in_reply_to}&" if ($in_reply_to > 0);
-	if (!$rt_id && defined $lat && defined $long && $location) {
+	if (!$rp_id && defined $lat && defined $long && $location) {
 		print $stdout "-- using lat/long: ($lat, $long)\n";
 		$i .= "lat=${lat}&long=${long}&";
-	} elsif ((defined $lat || defined $long) && $location && !$rt_id) {
+	} elsif ((defined $lat || defined $long) && $location && !$rp_id) {
 		print $stdout
 		"-- warning: incomplete location ($lat, $long) ignored\n";
 	}
-	$i .= "${payload}=${urle}${user_name_dm}" unless ($rt_id);
-	$i .= "id=$rt_id" if ($rt_id);
+	$i .= "${payload}=${urle}${user_name_dm}" unless ($rp_id);
+	$i .= "id=$rp_id" if ($rp_id);
 	$slowpost += 0; if ($slowpost && !$script && !$status && !$silent) {
 		if($pid = open(SLOWPOST, '-|')) {
 			# pause background so that it doesn't kill itself
@@ -4728,7 +4790,7 @@ sub updatest {
 	}
 	my $return = &backticks($baseagent, '/dev/null', undef,
 		(length($user_name_dm)) ? $dmupdate :
-		($rt_id) ? "$rturl/${rt_id}.json" :
+		($rp_id) ? &urlp($rpurl, $whoamid, $rp_id) :
 		$update, $i, 0, @wend);
 	print $stdout "-- return --\n$return\n-- return --\n"
 		if ($superverbose);
@@ -4759,7 +4821,7 @@ EOF
 		return 98;
 	}
 	$lastpostid = &parsejson($return)->{'id'};
-	unless ($user_name_dm || $rt_id) {
+	unless ($user_name_dm || $rp_id) {
 		$lasttwit = $string;
 		&$postpost($string);
 	}
@@ -4922,6 +4984,8 @@ sub standardpost {
 	my $g;
 	my $h;
 
+	$post = "[This post has been deleted.]" if (!length($post));
+
 	# wordwrap really ruins our day here, thanks a lot, T@augmentedfourth
 	# have to insinuate the ansi sequences after the string is wordwrapped
 
@@ -4937,7 +5001,7 @@ sub standardpost {
 		length($ref->{'geo'}->{'coordinates'}->[0]) &&
 		$ref->{'geo'}->{'coordinates'}->[1] ne 'undef' &&
 		length($ref->{'geo'}->{'coordinates'}->[0]));
-	$sn = "%$sn" if (length($ref->{'reposted_status'}->{'id'}));
+	$sn = "%$sn" if (length($ref->{'repost_of'}->{'id'}));
 	$sn = "*$sn" if ($ref->{'source'}->{'name'} =~ /Texapp/ && $texappistas);
 	# prepend list information, if this post originated from a list
 	$sn = "($ref->{'tag'}->{'payload'})$sn"	
@@ -4950,9 +5014,10 @@ sub standardpost {
 
 	# append reply count (maybe later)
 
-	# append repost count (maybe later)
-	$h = $ref->{'repost_count'}; $h += 0; #$h = "${h}+" if ($h >= 100);
-	$post = "(x${h}) $post" if ($h > 1 && !$nonewrts);
+	# append repost count
+	$h = $ref->{'num_reposts'}; $h += 0;
+	$post = "(x${h}) $post" if ($h && !$nonewrps);
+
 	# T@br3nda's modified timestamp patch
 	if ($timestamp) {
 		my ($time, $ts) = &$wraptime($ref->{'created_at'});
@@ -5413,14 +5478,16 @@ sub defaultposttype {
 			return 'reply';
 		} 
 	}
-	if ($ref->{'class'} eq 'search') { # anonymous allows this too
-		# if this is a search result, colour cyan
-		return 'search';
-	}
-	if ($ref->{'tag'}->{'type'} eq 'list') { # anonymous allows this too
-		return 'list';
-	}
-	return 'default';
+	#if ($ref->{'class'} eq 'search') { # anonymous allows this too
+	#	# if this is a search result, colour cyan
+	#	return 'search';
+	#}
+	#if ($ref->{'tag'}->{'type'} eq 'list') { # anonymous allows this too
+	#	return 'list';
+	#}
+	#return 'default' if ($ref->{'tag'}->{'type'} ne 'timeline');
+	return 'follow' if ($ref->{'user'}->{'you_follow'} eq 'true');
+	return 'alien';
 }
 
 sub defaultconclude {
@@ -5684,7 +5751,7 @@ sub get_post {
 	$k =~ s/\s+$//; # remove trailing spaces
 	print $stdout "-- background store fetch: $k\n" if ($verbose);
 	($w->{'menu_select'}, $w->{'id'}, $w->{'reply_to'},
-		$w->{'reposted_status'}->{'id'},
+		$w->{'repost_of'}->{'id'},
 		$w->{'user'}->{'geo_enabled'},
 		$w->{'geo'}->{'coordinates'}->[0],
 		$w->{'geo'}->{'coordinates'}->[1],
@@ -5693,7 +5760,7 @@ sub get_post {
 		$w->{'num_replies'},
 		$w->{'num_stars'},
 		$w->{'thread_id'},
-		$w->{'repost_count'}, 
+		$w->{'num_reposts'},
 		$w->{'user'}->{'username'}, $w->{'created_at'},
 			$l) = split(/\s/, $k, 16);
 	($w->{'source'}->{'name'}, $k) = split(/\|/, $l, 2);
@@ -6398,7 +6465,8 @@ sub generate_ansi {
 	$UNDER = ($ansi) ? "${ESC}[4m" : '';
 	$OFF = ($ansi) ? "${ESC}[0m" : '';
 
-	foreach $k (qw(prompt me dm reply warn search list default)) {
+	foreach $k
+	(qw(prompt me dm reply warn search list default follow alien)) {
 		${"colour$k"} = uc(${"colour$k"});
 		if (!defined($${"colour$k"})) {
 			print $stdout
@@ -6615,9 +6683,32 @@ if(0) {
 
 # like grabjson, but unwraps the JSON response envelope
 sub grabjadn {
-	my $my_json_ref = &grabjson; # passes all args
+	my $url = shift;
+	my $last_id = shift;
+	my $is_anon = shift;
+	my $count = shift;
+	my $tag = shift;
+	my $do_entities = shift;
+
+	#my $my_json_ref = &grabjson; # passes all args
+	my $my_json_ref = &grabjson($url, $last_id, $is_anon, $count, $tag,
+		$do_entities);
+
 	return ($my_json_ref) if ($undef);
 	if ($my_json_ref->{'data'}) {
+		if (ref($my_json_ref->{'data'}) eq 'HASH' &&
+			$my_json_ref->{'data'}->{'source'}  &&
+			length($my_json_ref->{'data'}->{'id'}) &&
+			$my_json_ref->{'data'}->{'you_reposted'}) {
+				$my_json_ref->{'data'} =
+				&normalizejson($my_json_ref->{'data'});
+		}
+		if (ref($my_json_ref->{'data'}) eq 'ARRAY') {
+			my $i;
+			foreach $i (@{ $my_json_ref->{'data'} }) {
+				$i = &normalizejson($i, 0, $tag);
+			}
+		}
 		# attempt to put 'meta' in 'data', if 'data' is a hashref
 		# otherwise, the consumer will have to call grabjson directly.
 		$my_json_ref->{'data'}->{'meta'} = $my_json_ref->{'meta'}
@@ -6641,7 +6732,7 @@ sub grabjadn {
 # - if the calling function has specified a tag, tag the posts, since
 #   we're iterating through them anyway. the tag should be a hashref payload.
 # - if the post is an newRT, unwrap it so that the full post text is
-#   revealed (unless -nonewrts).
+#   revealed (unless -nonewrps).
 # - if this appears to be a post, put in a stub geo hash if one does
 #   not yet exist.
 # - if coordinates are flat string 'null', turn into a real null.
@@ -6655,6 +6746,7 @@ sub normalizejson {
 	# tag the post
 	$i->{'tag'} = $tag if (defined($tag));
 
+if(0) {
 	# id -> id if needed
 	if (!length($i->{'id'})) {
 		my $k = "" + (0 + $i->{'id'});
@@ -6701,17 +6793,16 @@ sub normalizejson {
 	}
 
 	# normalize newRTs
-	# if we get newRTs with -nonewrts, oh well
-	if (!$nonewrts && ($rt = $i->{'reposted_status'})) {
-		# reconstruct the RT in a "canonical" format
-		# without truncation, but detco it first
-		#$i->{'reposted_status'} = &destroy_all_tco($rt);
-		$i->{'text'} =
-		"RT \@$rt->{'user'}->{'username'}" . ': ' . $rt->{'text'};
+	# if we get newRTs with -nonewrps, oh well
+	if (!$nonewrps && ($rt = $i->{'repost_of'})) {
+		# This should not be needed for ADN.
+		#$i->{'repost_of'} = &destroy_all_tco($rt);
+		#$i->{'text'} =
+		#"RT \@$rt->{'user'}->{'username'}" . ': ' . $rt->{'text'};
 	}
+}
 
 	return $i;
-	#return &destroy_all_tco($i);
 }
 
 # process the JSON data ... simplemindedly, because I just write utter crap,
