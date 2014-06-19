@@ -8053,9 +8053,9 @@ EOF
 
 sub updatecheck {
 	my $vcheck_url =
-		"http://www.floodgap.com/software/texapp/00current.txt";
+		"http://floodgapmirror.cobryce.com/software/texapp/00current.txt";
 	my $vrlcheck_url =
-		"http://www.floodgap.com/software/ttytter/01readlin.txt";
+		"http://floodgapmirror.cobryce.com/software/ttytter/01readlin.txt";
 	my $update_url = shift;
 
 	my $vs = '';
