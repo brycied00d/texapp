@@ -1,7 +1,7 @@
 #!/usr/bin/perl -s
 #########################################################################
 #
-# Texapp v0.6 (c)2012-3 cameron kaiser (and contributors).
+# Texapp v0.6 (c)2012-4 cameron kaiser (and contributors).
 # all rights reserved.
 # http://www.floodgap.com/software/texapp/
 #
@@ -30,9 +30,9 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 7;
+	$Texapp_PATCH_VERSION = 8;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
-	$current_rc_version = 1;
+	$current_rc_version = 2;
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
 			$ENV{'ALL'};
@@ -83,7 +83,7 @@ BEGIN {
 		creliurl delliurl deluliurl crefliurl delfliurl
 		getuliurl getufliurl rturl rpsofidurl
 		statusliurl followliurl leaveliurl followersurl mutedurl
-		oauthurl oauthauthurl oauthaccurl oauthbase wtrendurl
+		oauthurl oauthauthurl oauthaccurl wtrendurl
 		atrendurl favsofidurl intsofmeurl fridurl
 	); %opts_secret = map { $_ => 1} qw(
 		superverbose texappistas
@@ -123,7 +123,7 @@ BEGIN {
 		nonewrps synch runcommand bearertoken
 		credurl keyf readlinerepaint personal
 		simplestart exception_is_maskable oldperl
-		notify_tool_path oauthurl oauthauthurl oauthaccurl oauthbase
+		notify_tool_path oauthurl oauthauthurl oauthaccurl
 		signals_use_posix dostream eventbuf streamallreplies
 	); %valid = (%opts_can_set, %opts_others);
 	$rc = (defined($rc) && length($rc)) ? $rc : "";
@@ -553,28 +553,48 @@ if ($termrl) {
 if ($using_rc_file) {
 	unless ($savequit) {
 		if (defined($rc_version) && $rc_version < $current_rc_version){
-			print
-"** your RC file is version $rc_version, current is $current_rc_version\n".
+			$bad_rc = "\n".
+"** your .texapprc is version $rc_version, current is $current_rc_version\n".
 "** some default settings or internal URLs may have changed\n".
 "** new features in this version of Texapp may not behave correctly\n".
-"** not automatically modifying it (restart with -savequit if you want this)\n"
-."\n"
-				unless ($silent);
+"** not automatically modifying it because you aren't using -savequit\n" .
+"** (restart with -savequit if you want this)\n"
+."\n";
+			print $bad_rc unless ($silent);
 		}
 	} elsif (0+$rc_version < $current_rc_version) {
 		$rc_version += 0;
-		print
-"** your RC file is version $rc_version, automatically updating\n"
-			unless ($silent);
+		$bad_rc =
+"** your .texapprc is version $rc_version, automatically updating\n";
 		# cascade through the versions
 		if ($rc_version < 1) {
-			print "** updating to version 1\n" unless ($silent);
+			$bad_rc .= "** updating to version 1\n";
+			print $bad_rc unless ($silent);
 
 			# fix track, force bearertoken out of rc file
 			$queryurl = "${apibase}/posts/search"
 			if ($queryurl eq "${apibase}/search/posts.json");
 				$rc_version = 1;
 		}
+		if ($rc_version < 2) {
+			$bad_rc .= "** updating to version 2\n";
+			print $bad_rc unless ($silent);
+
+			# remove oauthbase
+			undef $oauthbase;
+
+			# merge URLs
+			foreach $k (keys %opts_urls) {
+				my $w = $$k;
+				next if (!length($w));
+				$w =~
+s#^https://alpha-api.app.net/stream/0#https://api.app.net#;
+				$$k = $w;
+			}
+
+			$rc_version = 2;
+		}
+		$bad_rc .= "** update completed successfully\n";
 
 		# done with cascade
 		&savestate;
@@ -684,9 +704,8 @@ $long ||= undef;
 $location ||= 0;
 $linelength ||= 256;
 $pmlength ||= 2048;
-$oauthbase ||= $apibase || "${http_proto}://alpha-api.app.net/";
-# this needs to be AFTER oauthbase so that apibase can set oauthbase.
-$apibase ||= "${http_proto}://alpha-api.app.net/stream/0";
+$apibase ||= "${http_proto}://api.app.net";
+#$apibase ||= "${http_proto}://alpha-api.app.net/stream/0";
 
 # special case: if we explicitly refuse backload, don't load initially.
 $backload = 30 if (!defined($backload)); # zero is valid!
@@ -1158,7 +1177,7 @@ if (length($credentials)) {
 	$credlog = "-- you are logged in as ${EM}$whoami${OFF}\n";
 }
 $connection_id = "${whoami}-${whoamid}-$$";
-$feedwhere = ($personal) ?
+$feedwhere = ($url eq $homeurl) ?
 "-- you are viewing your ${EM}personal stream${OFF} (${EM}/global${OFF} for global)\n" :
 "-- you are viewing the ${EM}global feed${OFF} (${EM}/personal${OFF} for personal stream)\n";
 
@@ -1298,7 +1317,7 @@ $V = "${Texapp_VERSION}.${padded_patch_version}";
 $e = <<'EOF';
 
 ${RED} /\      /\${OFF}   ${CYAN}################################################################${OFF}
-${RED}/ ${YELLOW}M${RED}\    /${YELLOW}M${RED} \  ${CYAN}#${OFF}             ${EM}texapp ${V} (c)2013 cameron kaiser${OFF}             ${CYAN}#${OFF}
+${RED}/ ${YELLOW}M${RED}\    /${YELLOW}M${RED} \  ${CYAN}#${OFF}             ${EM}texapp ${V} (c)2014 cameron kaiser${OFF}             ${CYAN}#${OFF}
 ${RED}\ ${YELLOW}MM${RED}\  /${YELLOW}MM${RED} /  ${CYAN}#${OFF}                                                              ${CYAN}#${OFF}
 ${RED} \ ${YELLOW}MM${RED}\/${YELLOW}MM${RED} /   ${CYAN}#${OFF}          based on TTYtter 2.1 - all rights reserved.         ${CYAN}#${OFF}
 ${RED}  \ ${YELLOW}MMMM${RED} /    ${CYAN}#${OFF}       freeware under the Floodgap Free Software License      ${CYAN}#${OFF}
@@ -1315,7 +1334,7 @@ EOF
 	$e =~ s/\$\{([A-Z]+)\}/${$1}/eg; print $stdout $e;
 } else {
 	print <<"EOF";
-Texapp ${Texapp_VERSION}.${padded_patch_version} (c)2013 cameron kaiser
+Texapp ${Texapp_VERSION}.${padded_patch_version} (c)2014 cameron kaiser
 all rights reserved. freeware under the floodgap free software license.
 http://www.floodgap.com/software/ffsl/
 
@@ -2588,7 +2607,7 @@ For more, like readline support, UTF-8, SSL, proxies, etc., see the docs.
 
 ** READ THE COMPLETE DOCUMENTATION: http://www.floodgap.com/software/texapp/
 
- Texapp $Texapp_VERSION is (c)2013 cameron kaiser + contributors.
+ Texapp $Texapp_VERSION is (c)2014 cameron kaiser + contributors.
  all rights reserved. this software is offered AS IS, with no guarantees. it
  is not endorsed by App.net or their executive staff or operators.
 
@@ -3527,7 +3546,7 @@ if(0) {
 		# don't repeat the target or myself; track other mentions
 		# that aren't in dontautoreply
 		my %did_mentions = map { $_ => 1 }
-			(lc($target), @dontautoreply_);
+			(lc($target), keys %dontautoreply_);
 		my $reply_post = &descape($post->{'text'}) . ' @' . $original;
 
 		#while($reply_post =~ s/\@(\w+)//) {
@@ -3545,9 +3564,13 @@ if(0) {
 		}
 		$_ .= " $text";
 
-		# add everyone in did_mentions to readline_completion
-		grep { $readline_completion{'@'.$_}++ } (keys %did_mentions)
-			if ($termrl);
+		# add everyone in did_mentions to readline_completion who is
+		# not in %dontautoreply_
+		grep {
+			$readline_completion{'@'.$_}++
+				if (!$dontautoreply_{$_} &&
+				    !$dontautoreply_{'@'.$_});
+		} (keys %did_mentions) if ($termrl);
 		&add_thread($post->{'thread_id'}) if ($dof);
 
 		# and fall through to post
@@ -4353,18 +4376,20 @@ DONT_REFRESH:
 	# nrvs is tricky with synchronicity
 	if (!$synch || ($synch && $synchronous_mode && !$pm_first_time)) {
 		$k = length($notify_rate) + length($vs) + length($credlog)
-			+ length($feedwhere);
+			+ length($feedwhere) + length($bad_rc);
 		if ($k) {
 			&std($notify_rate);
 			&std($vs);
 			&std($credlog);
 			&std($feedwhere);
+			&std($bad_rc);
 			$wrapseq = 1;
 		}
 		$notify_rate = "";
 		$vs = "";
 		$credlog = "";
 		$feedwhere = "";
+		$bad_rc = "";
 	}
 	print P "0" if ($synchronous_mode && $interactive);
 
@@ -6138,6 +6163,9 @@ sub savestate {
 	# call all extensions with collectsave
 	&$collectsave;
 
+	# set RC version
+	$rc_version ||= $current_rc_version;
+
 	# copy to backup, but only if it already exists
 	if (-e "$rcf") {
 		if(!open(B, ">${rcf}~") || !open(BB, "${rcf}\n")) {
@@ -7177,6 +7205,59 @@ sub notifier_growl {
 	exit;
 }
 
+# alloy/terminal-notifier for OS X 10.8+, mostly based on Growl
+sub notifier_osxnc {
+	my $class = shift;
+	my $text = shift;
+	my $ref = shift; # not used in this version
+
+	if (!defined($class) || !length($notify_tool_path)) {
+		# we are being asked to initialize
+		$notify_tool_path = &wherecheck("trying to find terminal-notifier in /Applications",
+"/Applications/terminal-notifier.app/Contents/MacOS/terminal-notifier",
+"terminal-notifier must be installed to use OS X notifications. check your\n" .
+			"documentation for how to do this.\n")
+				unless ($notify_tool_path);
+		if (!defined($class)) {
+			return 1 if ($script || $notifyquiet);
+			$class = 'OS X Notification Center support activated';
+			$text = 'PowerPC forever!';
+		}
+	}
+	# handle this in the background for faster performance.
+	# to avoid problems with SIGCHLD, we fork ourselves twice (mmm!),
+	# leaving an orphan which init should grab (we need SIGCHLD for
+	# proper backticks, so it can't be IGNOREd).
+	my $gchild;
+	if ($gchild = fork()) {
+		# the parent harvests the child, which will die immediately.
+		waitpid($gchild, 0);
+		return 1;
+	} elsif (!defined ($gchild)) {
+		print $stdout "warning: failed notifier fork: $!\n";
+		return 1;
+	}
+	# this is the child. spawn, then exit and abandon our own child,
+	# which init will reap. the problem with teen pregnancy is mounting.
+	$in_backticks = 1;
+	my $hchild;
+	if ($hchild = fork()) {
+		exit;
+	} elsif (!defined ($hchild)) {
+		print $stdout "warning: failed notifier fork: $!\n";
+		exit;
+	}
+	# this is the subchild, which is abandoned at a fire sta^W^W^Winit.
+	# make it be quiet when we remove old posts.
+	my $r = ($class eq 'PM') ? "" : "-remove Texapp -group Texapp";
+	open(OSXNC, "|$notify_tool_path -title 'Texapp' -subtitle '$class' -activate com.apple.Terminal $r >/dev/null 2>&1");
+	binmode(OSXNC, ":utf8") unless ($seven);
+	print OSXNC $text;
+	close(OSXNC);
+	exit;
+}
+
+
 # libnotify for {Linux,whatevs}
 # this is EXPERIMENTAL, and requires this patch to notify-send:
 # http://www.floodgap.com/software/texapp/libnotifypatch.txt
@@ -7844,11 +7925,11 @@ print $stdout "*** syntax error in list $u/$l\n";
 # -dontautoreply compiler
 sub dontautoreply_compile {
 	my $s = $dontautoreply;
-	undef @dontautoreply_;
+	undef %dontautoreply_;
 	$s =~ s/^\s*['"]?\s*//;
 	$s =~ s/\s*['"]?\s*$//;
 	return if (!length($s));
-	@dontautoreply_ = split(/\s*,\s*/, $s);
+	%dontautoreply_ = map { $_ => 1 } split(/\s*,\s*/, $s);
 }
 
 # -filterflags compiler (replaces old -filter syntax)
@@ -8585,7 +8666,7 @@ sub parsejson {
 
 	# and then we're going to turn the inline ones all back except
 	# ssqq, which we'll do last so that our syntax checker still works.
-	$data =~ s/$bbqqmask/\\\\/g; 
+	$data =~ s/$bbqqmask/\\\\\\\\/g; # eight, because eval eats the escapes
 	$data =~ s/$ddqqmask/"/g;
 
 	print $stdout "$data\n" if ($superverbose);
@@ -8799,6 +8880,13 @@ sub descape {
 	my $x = shift;
 	my $mode = shift;
 
+	# protect double backslashes
+	my $bbqqmask = "BBQQ";
+	$seed = 0;
+	$seed++ while ($data =~ /$bbqqmask$seed/);
+	$bbqqmask .= $seed;
+	$x =~ s/\\\\/$bbqqmask/g;
+
 	# handle backslashed entities and newlines
 	if ($newline) {
 		$x =~ s/\\r//sg;
@@ -8809,7 +8897,7 @@ sub descape {
 			$x = "\n$x" if ($nlc > 2);
 		}
 	}
-	#$x =~ s#\\\\#\\#sg;
+	$x =~ s#$bbqqmask#\\#sg;
 
 	# try to do something sensible with unicode
 	if ($mode) { # this probably needs to be revised
