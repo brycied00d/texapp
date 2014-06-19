@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.5";
-	$Texapp_PATCH_VERSION = 3;
+	$Texapp_PATCH_VERSION = 4;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -5364,6 +5364,7 @@ $my_json_ref->[(&min($print_max,scalar(@{ $my_json_ref }))-1)]->{'created_at'});
 
 sub pmscan {
 	my $top = shift;
+	my $topfetch = ($top > 0) ? $top : ($top == 0) ? 200 : 1;
 	my $k;
 	my $max;
 	my @outarray;
@@ -5374,9 +5375,10 @@ sub pmscan {
 			if ($interactive);
 		return;
 	}
-	# do not fetch deleted posts here.
+
+	# get all the channels. do not fetch deleted posts here.
 	my $ref = &grabjadn(
-"${chanurl}?channel_types=net.app.core.pm&include_deleted=0&include_recent_message=1&count=200");
+"${chanurl}?channel_types=net.app.core.pm&include_deleted=0&include_recent_message=1&count=$topfetch");
 	return if (ref($ref) ne 'ARRAY');
 	$pm_first_time = 0; # assume the fetch was successful
 	return if (!scalar(@{ $ref }));
@@ -5465,39 +5467,52 @@ sub pmrefresh {
 		my @messages = ();
 		my $c;
 
-		# get all channels with their most recent messages
+		# quickly check if we have *any* messages (count=1).
 		my $ref = &grabjadn(
-"${chanurl}?channel_types=net.app.core.pm&include_recent_message=1&count=200");
+"${chanurl}?channel_types=net.app.core.pm&include_recent_message=1&count=1");
 		return if (ref($ref) ne 'ARRAY' || !scalar(@{ $ref }));
+
+		if ($ref->[0]->{'recent_message'}->{'id'} > $x_last_pm) {
+			# the most recent message is newer. check for older;
+			# get all channels with their most recent messages.
+			my $ref = &grabjadn(
+"${chanurl}?channel_types=net.app.core.pm&include_recent_message=1&count=200");
 
 		# go through the channels. if the most recent message in each
 		# is greater than last_pm, fetch all messages and add all
 		# messages to the arrayref that are more recent than last_pm
 		# (use since_id and a count of 200 for maximum goodness).
-		foreach $c (@{ $ref }) {
-			my $cid = $c->{'id'};
-			my $cmid = $c->{'recent_message'}->{'id'};
-			print $stdout
+			foreach $c (@{ $ref }) {
+				my $cid = $c->{'id'};
+				my $cmid = $c->{'recent_message'}->{'id'};
+				print $stdout
 "-- background pmscan: channel = $cid mrm_id = $cmid\n" if ($verbose);
 
-			next unless ($cmid > $x_last_pm);
+				next unless ($cmid > $x_last_pm);
 
-			my $ms_ref = &grabjadn(&urlp($chanmsbyidurl,,$cid),
-				$x_last_pm, 0, 200);
-			next if (ref($ms_ref) ne 'ARRAY' ||
-				!scalar(@{ $ms_ref })); # hmmm ....
+				my $ms_ref = &grabjadn(
+					&urlp($chanmsbyidurl,,$cid),
+					$x_last_pm, 0, 200);
+				next if (ref($ms_ref) ne 'ARRAY' ||
+					!scalar(@{ $ms_ref })); # hmmm ....
 
-			my $ct = &pmchanneltocontext($c);
-			if (!$ct) { print $stdout
+				my $ct = &pmchanneltocontext($c);
+				if (!$ct) { print $stdout
 "-- transient failure converting to context; skipping channel\n"
-				if ($verbose); next; }
-			$context_cache{$cid} = $ct;
-			print $stdout
+					if ($verbose); next; }
+				$context_cache{$cid} = $ct;
+				print $stdout
 "-- fetched @{[ scalar(@{ $ms_ref }) ]} new messages for channel $cid\n"
-				if ($verbose);
+					if ($verbose);
 			
-			push(@messages, @{ $ms_ref });
+				push(@messages, @{ $ms_ref });
+			}
+		} else {
+			print $stdout
+		"-- quick check: nothing newer than $x_last_pm\n"
+				if ($verbose);
 		}
+
 		if (!scalar(@messages)) {
 			if ($interactive) {
 				&std("-- sorry, no new PMs found.\n");
@@ -6818,12 +6833,15 @@ $last_fetched_code = '';
 $last_fetched_ref = undef;
 sub get_post {
 	my $code = lc(shift);
-	return $last_fetched_ref if ($last_fetched_code eq $code);
 
 #TODO
-# implement querying the id_cache here. we need IPC for it, though.
+# this needs a better way to be invalidated by the background.
+	#return $last_fetched_ref if ($last_fetched_code eq $code);
+
 	# if the code is all numbers, treat it like an id, and try
 	# to get it from the server. we have similar code in get_pm.
+#TODO
+# implement querying the id_cache here. we need IPC for it, though.
 	return &grabjadn(&urlp($idurl,,$code), 0, 0, 0, undef, 1)
 		if ($code =~ /^[0-9]+$/);
 
