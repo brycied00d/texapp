@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "texapp";
 	$Texapp_VERSION = "0.2";
-	$Texapp_PATCH_VERSION = 3;
+	$Texapp_PATCH_VERSION = 4;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -113,7 +113,7 @@ BEGIN {
 		daemon timestamp user anonymous script readline
 		leader ssl rc norc vcheck apibase notifytype exts
 		nonewrps synch runcommand bearertoken
-		credurl keyf readlinerepaint
+		credurl keyf readlinerepaint personal
 		simplestart exception_is_maskable oldperl
 		notify_tool_path oauthurl oauthauthurl oauthaccurl oauthbase
 		signals_use_posix dostream eventbuf streamallreplies
@@ -2315,6 +2315,8 @@ EOF
 
 	# doesn't work yet #
 	if (m#^/(df|doesfollow)\s+\@?([^\s]+)\s+\@?([^\s]+)$#) {
+#TODO
+# FIXME
 		print $stdout
 "*** sorry, three argument /doesfollow not yet supported\n";
 		return 0;
@@ -2670,7 +2672,7 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 				"-- hmm. seems contradictory. no dice.\n";
 			return 0;
 		}
-		my $post = &get_post($code);
+		my $post = &get_original_post($code);
 		if (!defined($post)) {
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
@@ -2687,11 +2689,11 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 		}
 	}
 
-	# Repost API and manual RTs
+	# Repost API and manual RTs (/erp, /orp, etc.)
 	if (s#^/([oe]?)r(epost|t|p) ([zZ]?[a-zA-Z]?[0-9]+)\s*##) {
 		my $mode = $1;
 		my $code = lc($3);
-		my $post = &get_post($code);
+		my $post = &get_original_post($code);
 		if (!defined($post)) {
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
@@ -2729,7 +2731,7 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 	# /rtsof (/rpsof)
 	if (m#^/r[pt]s?of\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($1);
-		my $post = &get_post($code);
+		my $post = &get_original_post($code);
 		my $id;
 
 		if (!defined($post)) {
@@ -2761,7 +2763,7 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 	# /starred
 	if (m#^/sta?r?r?ed\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($1);
-		my $post = &get_post($code);
+		my $post = &get_original_post($code);
 		my $id;
 
 		if (!defined($post)) {
@@ -2873,11 +2875,26 @@ if(0) {
 		return 0;
 	}
 
+	# /rg is a /reply with no @ information (thus no /v-ariant)
+	if (s#^/re?p?l?y?g ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
+		my $mode = $1;
+		my $code = lc($1);
+		my $post = &get_original_post($code);
+		if (!defined($post)) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+		$in_reply_to = $post->{'id'};
+		$expected_post_ref = $post;
+		goto TWEETPRINT; # fugly! FUGLY!
+	}
+
+	# /vreply and DM and regular /reply
 	if (s#^/(v)?re(ply)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
 		my $mode = $1;
 		my $code = lc($3);
 		unless ($code =~ /^d[0-9][0-9]+/) { # this is a DM
-		my $post = &get_post($code);
+		my $post = &get_original_post($code);
 		if (!defined($post)) {
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
@@ -2922,12 +2939,20 @@ if(0) {
 		my $code = $5;
 
 		# common code from /vreply
+		# we use get_post here, though, so we can include reposters
+		# in the reply-all.
 		my $post = &get_post($code);
 		if (!defined($post)) {
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
 		}
 		my $target = &descape($post->{'user'}->{'username'});
+		my $original = $target;
+		if ($post->{'repost_of'}->{'id'}) {
+			$post = &get_original_post($code);
+			$target = &descape($post->{'user'}->{'username'});
+		}
+
 		my $text = $_;
 		$_ = '@' . $target;
 		unless ($mode eq 'v') {
@@ -2939,7 +2964,7 @@ if(0) {
 
 		# don't repeat the target or myself; track other mentions
 		my %did_mentions = map { $_ => 1 } (lc($target));
-		my $reply_post = &descape($post->{'text'});
+		my $reply_post = &descape($post->{'text'}) . ' @' . $original;
 
 		while($reply_post =~ s/\@(\w+)//) {
 			my $name = $1;
@@ -2950,7 +2975,7 @@ if(0) {
 		$_ .= " $text";
 
 		# add everyone in did_mentions to readline_completion
-		grep { $readline_completion{$_}++ } (keys %did_mentions)
+		grep { $readline_completion{'@'.$_}++ } (keys %did_mentions)
 			if ($termrl);
 
 		# and fall through to post
@@ -3336,7 +3361,7 @@ EOF
 
 TWEETPRINT: # fugly! FUGLY!
 	$rv = &common_split_post($_, $in_reply_to, undef);
-	&thump if (!$rv);
+	&thump if ($rv);
 	return $rv;
 }
 
@@ -5050,12 +5075,14 @@ sub standardpost {
 	$post = "<$sn> $post";
 
 	# append star count
-	$h = $ref->{'num_stars'}; $h += 0; $post = "(*${h}) $post" if ($h);
+	$h = $ref->{'repost_of'}->{'num_stars'} || $ref->{'num_stars'};
+	$h += 0; $post = "(*${h}) $post" if ($h);
 
 	# append reply count (maybe later)
 
 	# append repost count
-	$h = $ref->{'num_reposts'}; $h += 0;
+	$h = $ref->{'repost_of'}->{'num_reposts'} || $ref->{'num_reposts'}; 
+	$h += 0;
 	$post = "(x${h}) $post" if ($h && !$nonewrps);
 
 	# T@br3nda's modified timestamp patch
@@ -5510,7 +5537,7 @@ sub defaultposttype {
 
 	# br3nda's and smb's modified colour patch
 	unless ($anonymous) {
-		if ($sn eq $whoami) {
+		if (lc($sn) eq $whoami) {
 			# if it's me speaking, colour the line yellow
 			return 'me';
 		} elsif ($post =~ /\@$whoami(\b|$)/i) {
@@ -5811,6 +5838,17 @@ sub get_post {
 	print $stdout "-- successfully retrieved from background\n"
 		if ($verbose);
 	return $w;
+}
+
+# this is a variation. it follows the post back, even through reposts, to
+# get the original ID. it calls get_post, and if it gets back a repost_of,
+# it calls get_post on that, until it gets something that is not a repost.
+sub get_original_post {
+	my $ref = &get_post; # with the same args
+	while(defined($ref) && length($ref->{'repost_of'}->{'id'})) {
+		$ref = &get_post($ref->{'repost_of'}->{'id'});
+	}
+	return $ref;
 }
 
 # this is the analogous function for a rolling DM code. it is somewhat
