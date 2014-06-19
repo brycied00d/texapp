@@ -30,9 +30,9 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 8;
+	$Texapp_PATCH_VERSION = 9;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
-	$current_rc_version = 2;
+	$current_rc_version = 1;
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
 			$ENV{'ALL'};
