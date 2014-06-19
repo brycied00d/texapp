@@ -4346,6 +4346,7 @@ $suspend_output = -1;
 $stream_failure = 0;
 $pm_first_time = ($pmpause) ? 1 : 0;
 $stuck_stdin = 0;
+$vcheck_timer = 0;
 
 # tell the foreground we are ready
 kill $SIGUSR2, $parent;
@@ -4775,6 +4776,20 @@ EOF
 		print $stdout
 "-- routine refresh (effpause = $effpause, $pmcount to next pm) ",
 			scalar localtime, "\n" if ($verbose);
+	}
+	
+	# Periodic update check (unless disabled)
+	# This loop cyles every ~20 seconds, so this works out to ~24 hours
+	if ($vcheck && $vcheck_timer > 4320) {
+		print $stdout "-- Checking for updated version...\n"
+			if ($verbose);
+		print $stdout &updatecheck(1);
+		$vcheck_timer = 0;	# reset
+	} else {
+		# tick!
+		print $stdout "-- Incrementing vheck_timer from $vcheck_timer\n"
+			if ($superverbose);
+		$vcheck_timer++;
 	}
 }
 
