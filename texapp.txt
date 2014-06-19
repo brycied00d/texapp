@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.5";
-	$Texapp_PATCH_VERSION = 0;
+	$Texapp_PATCH_VERSION = 1;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -3339,7 +3339,7 @@ if(0) {
 		my $code = lc($2);
 		my $context;
 
-		if ($lead_kind ne 'pm') {
+		if ($lead_id && $lead_kind ne 'pm') {
 			print $stdout "-- illogical: <postid on a PM channel\n";
 			return 0;
 		}
