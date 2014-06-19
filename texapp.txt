@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 2;
+	$Texapp_PATCH_VERSION = 3;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	$current_rc_version = 1;
 	# this is kludgy, yes.
@@ -39,7 +39,7 @@ BEGIN {
 	$my_version_string = "${Texapp_VERSION}.${Texapp_PATCH_VERSION}";
 	(warn ("$my_version_string\n"), exit) if ($version);
 
-	$space_pad = " " x 1024;
+	$space_pad = " " x 8192;
 	$background_is_ready = 0;
 
 	# for multi-module extension handling
@@ -48,6 +48,8 @@ BEGIN {
 	$muffle_server_messages = 0;
 	undef $master_store;
 	undef %push_stack;
+
+	$filtered = $lastfiltered = 0;
 
 	$padded_patch_version = substr($Texapp_PATCH_VERSION . " ", 0, 2);
 
@@ -1134,9 +1136,12 @@ if (length($credentials)) {
 		exit;
 	}
 	print "logged in as $whoami\n";
-	$credlog = "-- you are logged in as $whoami\n";
+	$credlog = "-- you are logged in as ${EM}$whoami${OFF}\n";
 }
 $connection_id = "${whoami}-${whoamid}-$$";
+$feedwhere = ($personal) ?
+"-- you are viewing your ${EM}personal stream${OFF} (${EM}/global${OFF} for global)\n" :
+"-- you are viewing the ${EM}global feed${OFF} (${EM}/personal${OFF} for personal stream)\n";
 
 #### BOT/DAEMON MODE STARTUP ####
 
@@ -1710,6 +1715,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 			my @superfields = (
 				[ "user", "username" ], # must always be first
 				[ "repost_of", "id" ],
+				[ "repost_of", "thread_id" ],
 				[ "_texapp_tag", "type" ],
 				[ "_texapp_tag", "payload" ],
 				[ "source", "name" ],
@@ -2754,7 +2760,7 @@ EOF
 	}
 
 	# this handles lists too. (or it will when ADN supports that)
-	if(s#^/(frs|friends|fos|followers|muted|blocked)(\s+\+\d+)?\s*##) {
+	if(s#^/(frs|friends|following|fos|followers|muted|blocked)(\s+\+\d+)?\s*##) {
 		my $countmaybe = $2;
 		my $mode = $1;
 		my $arg = lc($_);
@@ -2764,6 +2770,7 @@ EOF
 		my $uid;
 		$arg =~ s/^@//;
 		$who = $arg;
+		$mode = "friends" if ($mode eq 'following');
 		($who, $lname) = split(m#/#, $arg, 2) if (m#/#);
 #TODO
 # FIXME
@@ -2835,6 +2842,8 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		}
 		print $stdout "-- sorry, no $what found for $who.\n"
 			if (!$printed);
+		print $stdout "-- (more, use +xx for a longer list)\n"
+			if ($json_ref->{'meta'}->{'more'} eq 'true');
 		return 0;
 	}
 
@@ -3988,6 +3997,8 @@ EOF
 			? "-- user $uname isn't followed by any lists.\n"
 			: "-- no lists found for user $uname.\n");
 		}
+		print $stdout "-- (more, use +xx for a longer list)\n"
+			if ($json_ref->{'meta'}->{'more'} eq 'true');
 		return 0;
 	}
 
@@ -4308,16 +4319,19 @@ for(;;) {
 DONT_REFRESH:
 	# nrvs is tricky with synchronicity
 	if (!$synch || ($synch && $synchronous_mode && !$pm_first_time)) {
-		$k = length($notify_rate) + length($vs) + length($credlog);
+		$k = length($notify_rate) + length($vs) + length($credlog)
+			+ length($feedwhere);
 		if ($k) {
 			&std($notify_rate);
 			&std($vs);
 			&std($credlog);
+			&std($feedwhere);
 			$wrapseq = 1;
 		}
 		$notify_rate = "";
 		$vs = "";
 		$credlog = "";
+		$feedwhere = "";
 	}
 	print P "0" if ($synchronous_mode && $interactive);
 
@@ -4495,6 +4509,7 @@ EOF
 			$key = substr(( "$ms ".($key->{'id'})." ".
 		($key->{'reply_to'})." ".
 		($key->{'repost_of'}->{'id'})." ".
+		($key->{'repost_of'}->{'thread_id'})." ".
 		($key->{'_texapp_has_entity_links'})." ".
 		($key->{'_texapp_latitude'})." ".
 		($key->{'_texapp_longitude'})." ".
@@ -4509,7 +4524,7 @@ EOF
 				"0") . " " .
 		$key->{'user'}->{'username'}." $ds $src|".
 			unpack("${pack_magic}H*", $key->{'text'}).
-			$space_pad), 0, 1024);
+			$space_pad), 0, 8192);
 			print P $key;
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^piped (..)/) {
@@ -4518,7 +4533,7 @@ EOF
 			$key = substr(( $key->{'id'}." ".
 				$key->{'owner'}. " ".
 				join('|',@{ $key->{'users'} }).
-			$space_pad), 0, 1024);
+			$space_pad), 0, 8192);
 			print P $key;
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^pipep (..)/) {
@@ -4537,25 +4552,25 @@ EOF
 				$key->{'created_at'}." ".
 				$source." ".
 				unpack("${pack_magic}H*", $key->{'text'}).
-			$space_pad), 0, 1024);
+			$space_pad), 0, 8192);
 			print P $key;
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^ki ([^\s]+) /) {
 			my $key = $1;
 			my $module;
-			sysread(STDIN, $module, 1024);
+			sysread(STDIN, $module, 8192);
 			$module =~ s/\s+$//;
 			$module = pack("H*", $module);
 			print $stdout "-- fetch for module $module key $key\n"
 				if ($verbose);
 			print P substr(unpack("${pack_magic}H*",
 				$master_store->{$module}->{$key}).$space_pad,
-					0, 1024);
+					0, 8192);
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^kn ([^\s]+) /) {
 			my $key = $1;
 			my $module;
-			sysread(STDIN, $module, 1024);
+			sysread(STDIN, $module, 8192);
 			$module =~ s/\s+$//;
 			$module = pack("H*", $module);
 			print $stdout "-- nulled module $module key $key\n"
@@ -4566,10 +4581,10 @@ EOF
 			my $key = $1;
 			my $value;
 			my $module;
-			sysread(STDIN, $module, 1024);
+			sysread(STDIN, $module, 8192);
 			$module =~ s/\s+$//;
 			$module = pack("H*", $module);
-			sysread(STDIN, $value, 1024);
+			sysread(STDIN, $value, 8192);
 			$value =~ s/\s+$//;
 			print $stdout
 				"-- set module $module key $key = $value\n"
@@ -4589,9 +4604,9 @@ EOF
 			$comm = $1;
 			$key =$2;
 			if ($comm eq '?') {
-				print P substr("${$key}$space_pad", 0, 1024);
+				print P substr("${$key}$space_pad", 0, 8192);
 			} else {
-				sysread(STDIN, $value, 1024);
+				sysread(STDIN, $value, 8192);
 				$value =~ s/\s+$//;
 				$interactive = ($comm eq '+') ? 0 : 1;
 				&send_removereadline if
@@ -5393,12 +5408,22 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 					{'repost_of'}->
 					{'user'}->{'username'}))));
 
-			# first-a, filterthreads. this is also very fast.
+			# first-a, filterthreads. this is also very fast, but
+			# we need to look at several possible IDs.
 			my $thread = &descape($j->{'thread_id'});
 			(&killtw($j), next) if
 				($thread &&
 				 $filterthreads_sub &&
 				&$filterthreads_sub($thread));
+			if ($j->{'repost_of'} && $filterthreads_sub) {
+				(&killtw($j), next) if
+				 (length($j->{'repost_of'}->{'id'})&&
+				&$filterthreads_sub($j->{'repost_of'}->{'id'}));
+				(&killtw($j), next) if
+				 (length($j->{'repost_of'}->{'thread_id'})&&
+				&$filterthreads_sub(
+					$j->{'repost_of'}->{'thread_id'}));
+			}
 
 			# second, filterrps. this is almost as fast.
 			(&killtw($j), next) if
@@ -6917,8 +6942,14 @@ sub defaultposttype {
 
 sub defaultconclude {
 	(&flag_default_call, return) if ($multi_module_context);
-	if ($filtered && $filter_attribs{'count'}) {
-		&std("-- (filtered $filtered posts)\n");
+	if ($filter_attribs{'count'}) {
+		if ($filtered > 1 || ($filtered &&
+				($lastfiltered == $filtered))) {
+			&std("-- (filtered $filtered posts)\n");
+			$filtered = 0;
+		}
+		$lastfiltered = $filtered;
+	} else {
 		$filtered = 0;
 	}
 }
@@ -7191,8 +7222,8 @@ sub get_post {
 	print $stdout "-- querying background: $code\n" if ($verbose);
 	kill $SIGUSR2, $child if ($child);
 	print C "pipet $code ----------\n";
-	while(length($k) < 1024) {
-		sysread(W, $l, 1024);
+	while(length($k) < 8192) {
+		sysread(W, $l, 8192);
 		$k .= $l;
 	}
 	return undef if ($k !~ /[^\s]/);
@@ -7200,6 +7231,7 @@ sub get_post {
 	print $stdout "-- background store fetch: $k\n" if ($verbose);
 	($w->{'_texapp_menu_select'}, $w->{'id'}, $w->{'reply_to'},
 		$w->{'repost_of'}->{'id'},
+		$w->{'repost_of'}->{'thread_id'},
 		$w->{'_texapp_has_entity_links'},
 		$w->{'_texapp_latitude'},
 		$w->{'_texapp_longitude'},
@@ -7212,7 +7244,7 @@ sub get_post {
 		$w->{'num_reposts'},
 		$w->{'user'}->{'username'}, $w->{'created_at'},
 	##### HEY YOU! UPDATE THE NUMBER BELOW IF YOU ADD IPC FIELDS! #####
-			$l) = split(/\s/, $k, 17);
+			$l) = split(/\s/, $k, 18);
 	($w->{'source'}->{'name'}, $k) = split(/\|/, $l, 2);
 	$w->{'text'} = pack("H*", $k);
 	$w->{'_texapp_tag'}->{'payload'} = pack("H*", $w->{'_texapp_tag'}->{'payload'});
@@ -7256,8 +7288,8 @@ sub get_pm_context {
 	print $stdout "-- querying background: $code\n" if ($verbose);
 	kill $SIGUSR2, $child if ($child);
 	print C "piped $code ----------\n";
-	while(length($k) < 1024) {
-		sysread(W, $l, 1024);
+	while(length($k) < 8192) {
+		sysread(W, $l, 8192);
 		$k .= $l;
 	}
 	return undef if ($k !~ /[^\s]/);
@@ -7300,8 +7332,8 @@ sub get_pm {
 	print $stdout "-- querying background: $code\n" if ($verbose);
 	kill $SIGUSR2, $child if ($child); # prime pipe
 	print C "pipep $code ----------\n"; # internally two alphanum, recall
-	while(length($k) < 1024) {
-		sysread(W, $l, 1024);
+	while(length($k) < 8192) {
+		sysread(W, $l, 8192);
 		$k .= $l;
 	}
 	return undef if ($k !~ /[^\s]/);
@@ -7335,9 +7367,9 @@ sub getbackgroundkey {
 	print C substr("ki $key ---------------------", 0, 19)."\n";
 	my $ref = (length($dispatch_ref->[0])) ? ($dispatch_ref->[0]) :
 		"DEFAULT";
-	print C substr(unpack("${pack_magic}H*", $ref).$space_pad, 0, 1024);
-	while(length($k) < 1024) {
-		sysread(W, $l, 1024);
+	print C substr(unpack("${pack_magic}H*", $ref).$space_pad, 0, 8192);
+	while(length($k) < 8192) {
+		sysread(W, $l, 8192);
 		$k .= $l;
 	}
 	$k =~ s/[^0-9a-fA-F]//g;
@@ -7365,9 +7397,9 @@ sub sendbackgroundkey {
 	}
 	my $ref = (length($dispatch_ref->[0])) ? ($dispatch_ref->[0]) :
 		"DEFAULT";
-	print C substr(unpack("${pack_magic}H*", $ref).$space_pad, 0, 1024);
+	print C substr(unpack("${pack_magic}H*", $ref).$space_pad, 0, 8192);
 	return if (!length($value));
-	print C substr(unpack("${pack_magic}H*", $value).$space_pad, 0, 1024);
+	print C substr(unpack("${pack_magic}H*", $value).$space_pad, 0, 8192);
 }
 
 sub hold { print C "hold---------------\n" unless ($synch); &sync_semaphore; }
@@ -7498,7 +7530,7 @@ sub synckey {
 	kill $SIGUSR2, $child;
 	print C
 	(substr("${commchar}$key                           ", 0, 19) . "\n");
-	print C (substr(($value . $space_pad), 0, 1024));
+	print C (substr(($value . $space_pad), 0, 8192));
 }
 
 # getter for internal variables. right now this just returns the variable by
@@ -7514,7 +7546,7 @@ sub getvariable {
 		my $value;
 		kill $SIGUSR2, $child if ($child);
 		print C (substr("?$key                    ", 0, 19) . "\n");
-		sysread(W, $value, 1024);
+		sysread(W, $value, 8192);
 		$value =~ s/\s+$//;
 		return $value;
 	}
