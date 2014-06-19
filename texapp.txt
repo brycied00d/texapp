@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "texapp";
 	$Texapp_VERSION = "0.2";
-	$Texapp_PATCH_VERSION = 1;
+	$Texapp_PATCH_VERSION = 2;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -76,7 +76,7 @@ BEGIN {
 		dmupdate credurl blockurl blockdelurl friendsurl
 		modifyliurl adduliurl delliurl getliurl getlisurl getfliurl
 		creliurl delliurl deluliurl crefliurl delfliurl
-		getuliurl getufliurl dmsenturl rturl rtsbyurl dmidurl
+		getuliurl getufliurl dmsenturl rturl rpsofidurl dmidurl
 		statusliurl followliurl leaveliurl followersurl
 		oauthurl oauthauthurl oauthaccurl oauthbase wtrendurl
 		atrendurl favsofidurl
@@ -104,7 +104,7 @@ BEGIN {
 		nocounter linelength friendsurl followersurl lists
 		modifyliurl adduliurl delliurl getliurl getlisurl getfliurl
 		creliurl delliurl deluliurl crefliurl delfliurl atrendurl
-		getuliurl getufliurl dmsenturl rturl rtsbyurl wtrendurl
+		getuliurl getufliurl dmsenturl rturl rpsofidurl wtrendurl
 		statusliurl followliurl leaveliurl dmidurl nostreamreplies
 		filterusers filterats filterrts filterflags
 		filteratonly nofilter favsofidurl
@@ -656,9 +656,7 @@ $rlurl ||= "${apibase}/application/rate_limit_status.json";
 # not supported yet #
 
 $rpurl ||= "${apibase}/posts/%I/repost";
-
-# not supported yet #
-$rtsbyurl ||= "${apibase}/statuses/reposts/%I.json";
+$rpsofidurl ||= "${apibase}/posts/%I/reposters";
 
 # not supported yet #
 $dmurl ||= "${apibase}/direct_messages.json";
@@ -2727,6 +2725,39 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 		goto TWEETPRINT; # fugly! FUGLY!
 	}
 
+	# /rtsof (/rpsof)
+	if (m#^/r[pt]s?of\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $code = lc($1);
+		my $post = &get_post($code);
+		my $id;
+
+		if (!defined($post)) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+		$id = $post->{'repost_of'}->{'id'} ||
+			$post->{'id'};
+		if (!$id) {
+			print $stdout "-- hmmm, that post is major bogus.\n";
+			return 0;
+		}
+		my $users_ref = &grabjadn(&urlp($rpsofidurl,, $id), 0, 0,
+			0, undef, 1);
+		return if (!defined($users_ref) || ref($users_ref) ne 'ARRAY');
+		my $k = scalar(@{ $users_ref });
+		if (!$k) {
+			print $stdout
+"-- sorry, a careful review of ADN reveals this post sucks (no reposts).\n";
+			return 0;
+		}
+		my $j;
+		foreach $j (@{ $users_ref }) {
+			&$userhandle($j);
+		}
+		return 0;
+	}
+
+	# /starred
 	if (m#^/sta?r?r?ed\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($1);
 		my $post = &get_post($code);
@@ -2760,10 +2791,12 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 
 	# enable and disable NewRTs from users
 	# we allow this even if newRTs are off from -nonewrps
+if(0) {
 	if (s#^/rts(on|off)\s+## && length) {
 		&rtsonoffuser($_, 1, ($1 eq 'on'));
 		return 0;
 	}
+}
 
 	if (m#^/del(ete)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($2);
