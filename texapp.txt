@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.4";
-	$Texapp_PATCH_VERSION = 1;
+	$Texapp_PATCH_VERSION = 2;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -4070,7 +4070,7 @@ EOF
 			my $key = $pm_context_hash{$1};
 			$key = substr(( $key->{'id'}." ".
 				$key->{'owner'}. " ".
-				join('_',@{ $key->{'users'} }).
+				join('|',@{ $key->{'users'} }).
 			$space_pad), 0, 1024);
 			print P $key;
 			goto RESTART_SELECT;
@@ -5074,13 +5074,23 @@ sub pmscan {
 	"-- most recent $top messages on all channels (/pmscan for all channels)\n"
 	: "-- all channels (/pmagain on a PM to view thread)\n");
 
+	# sort them so that the most recent are at the top, but then descending
+	# order of the ones we select.
+
 	@outarray = ($top) ?
 		sort { $b->{'recent_message'}->{'id'}
 			<=> $a->{'recent_message'}->{'id'} } @{ $ref }
 		:
 		sort { $a->{'id'} <=> $b->{'id'} } @{ $ref }
 	;
-		
+	@outarray = @outarray[0..($top-1)];
+	@outarray = ($top) ?
+		sort { $a->{'recent_message'}->{'id'}
+			<=> $b->{'recent_message'}->{'id'} } @outarray
+		:
+		sort { $a->{'id'} <=> $b->{'id'} } @outarray
+	;
+	
 	foreach $k (@outarray) {
 		my $j = $k->{'recent_message'};
 		my $l = &pmchanneltocontext($k);
@@ -5093,7 +5103,6 @@ sub pmscan {
 		&assign_pm_key($j, $l);
 		&pmoutstack($j, $l);
 		$max = &max($max, $j->{'id'});
-		last unless (--$top);
 	}
 	$last_pm = &max($max, $last_pm);
 	return;
@@ -6473,7 +6482,7 @@ sub get_pm_context {
 	print $stdout "-- background store fetch: $k\n" if ($verbose);
 
 	($w->{'id'}, $w->{'owner'}, $m, $k) = split(/\s+/, $k, 4);
-	@u = split('_', $m);
+	@u = split(/\|/, $m);
 	$w->{'users'} = \@u;
 	return $w;
 }
