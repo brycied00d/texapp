@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.4";
-	$Texapp_PATCH_VERSION = 3;
+	$Texapp_PATCH_VERSION = 4;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -1058,8 +1058,7 @@ for(;;) {
 }
 print "SUCCEEDED!\n";
 exit(0) if (length($status));
-&sigify(sub { ; }, qw(USR1 PWR XCPU));
-&sigify(sub { $background_is_ready++ }, qw(USR2 SYS UNUSED XFSZ));
+&sigify('IGNORE', qw(USR1 PWR XCPU));
 if (length($credentials)) {
 	print "-- processing credentials: ";
 	$my_json_ref = &parsejson($credentials);
@@ -1265,7 +1264,11 @@ sub defaultmain {
 	$dont_use_counter = $nocounter;
 	eval '$termrl->hook_no_counter';
 	if ($termrl) {
+		# only have the repaint handler on while we're in readline.
+		&sigify(\&repaint, qw(USR1 PWR XCPU));
 		while(defined ($_ = $termrl->readline((&$prompt(1))[0]))) {
+			# ignore repaints now
+			&sigify("IGNORE", qw(USR1 PWR XCPU));
 			kill $SIGUSR1, $child; # suppress output
 			$rv = &prinput($_);
 			kill $SIGUSR2, $child; # resume output
@@ -1276,8 +1279,13 @@ sub defaultmain {
 				$dont_use_counter = $nocounter;
 				eval '$termrl->hook_no_counter'
 			}
+			# reenable them before we go back to readline
+			&sigify(\&repaint, qw(USR1 PWR XCPU));
 		}
+		# done with input from readline, no more repainting
+		&sigify("IGNORE", qw(USR1 PWR XCPU));
 	} else {
+		# ASSERT NO NEW SIGNAL HANDLERS!
 		&$prompt;
 		while(<>) { #not stdin so we can read from script files
 			kill $SIGUSR1, $child; # suppress output
@@ -1298,7 +1306,8 @@ sub defaultmain {
 #
 # DO NOT trap SIGCHLD: we generate child processes that die normally.
 &sigify(\&end_me, qw(PIPE INT));
-&sigify(\&repaint, qw(USR1 PWR XCPU));
+# temporarily ignore these signals
+&sigify("IGNORE", qw(USR1 PWR XCPU USR2 SYS UNUSED XFSZ));
 sub sigify {
 	# this routine abstracts setting signals to a subroutine reference.
 	# check and see if we have to use POSIX.pm (Perl 5.14+) or we can
@@ -1380,6 +1389,7 @@ sub sto { &s($streamout, @_); }
 
 # start the background process
 # this has to be last or the background process can't see the full API
+&sigify(sub { $background_is_ready++ }, qw(USR2 SYS UNUSED XFSZ));
 if ($child = open(C, "|-")) {
 	close(P);
 	binmode(C, ":utf8") unless ($seven);
@@ -1399,7 +1409,9 @@ if ($synch) {
 }
 
 # wait for background to become ready
-sleep 1 while (!$background_is_ready);
+sleep 1 until ($background_is_ready);
+# disengage the signal handler, we don't need it anymore
+&sigify("IGNORE", qw(USR2 SYS UNUSED XFSZ));
 
 # start the 
 &$main;
@@ -3785,6 +3797,20 @@ sub linein {
 	return $return;
 }
 
+sub output_signals {
+	$suspend_output = -1;
+	&sigify(sub {
+		$suspend_output ^= 1 if ($suspend_output != -1);
+	}, qw(USR1 PWR XCPU));
+	&sigify( sub {
+		$suspend_output = -1;
+	}, qw(USR2 SYS UNUSED XFSZ));
+}
+sub suppress_signals {
+	&sigify("IGNORE", qw(USR1 PWR XCPU USR2 SYS UNUSED XFSZ));
+	$suspend_output = -1;
+}
+
 #### this is the background part of the process ####
 
 MONITOR:
@@ -3792,6 +3818,7 @@ $0 = "Texapp (background init)";
 %store_hash = ();
 $is_background = 1;
 $first_synch = $synchronous_mode = 0;
+$rout = '';
 $rin = '';
 vec($rin,fileno(STDIN),1) = 1;
 # paranoia
@@ -3808,13 +3835,7 @@ unless ($seven) {
 # these signals before starting streaming, or we may "kill" ourselves by
 # accident because it is possible to process a post before these are
 # operational.
-&sigify(sub {
-	$suspend_output ^= 1 if ($suspend_output != -1);
-	$we_got_signal = 1;
-}, qw(USR1 PWR XCPU));
-&sigify( sub {
-	$suspend_output = -1; $we_got_signal = 1;
-}, qw(USR2 SYS UNUSED XFSZ));
+&suppress_signals; # default state
 &sigify("IGNORE", qw(INT)); # don't let slowpost kill us
 
 # now we can safely initialize streaming
@@ -3839,7 +3860,7 @@ if ($dostream) {
 	&sigify("IGNORE", qw(HUP)); # we only respond to SIGKILL/SIGTERM
 }
 
-$interactive = $previous_last_id = $we_got_signal = 0;
+$interactive = $previous_last_id = 0;
 $suspend_output = -1;
 $stream_failure = 0;
 $pm_first_time = ($pmpause) ? 1 : 0;
@@ -3885,7 +3906,17 @@ DONT_REFRESH:
 		$credlog = "";
 	}
 	print P "0" if ($synchronous_mode && $interactive);
-	&sflush;
+
+	# wrap the flush in signal handlers. THIS IS THE ONLY PART THAT
+	# NEEDS IT. do not allow signal handlers to execute once we have
+	# emitted data and are waiting for a command, or we can crash in
+	# later versions of Perl. finally, only even bother if we actually
+	# have stuff to print.
+	if (scalar(@stream_buf)) {
+		&output_signals;
+		&sflush; # this needs to know
+		&suppress_signals;
+	}
 
 	# this core loop is tricky. most signals will not restart the call.
 	# -- respond to alarms if we are ignoring our timeout.
@@ -3899,7 +3930,6 @@ DONT_REFRESH:
 RESTART_SELECT:
 	&send_repaint if ($termrl);
 	$interactive = 0;
-	$we_got_signal = 0; # acknowledge all signals
 	if ($effpause == undef) { # -script and anonymous have no effpause.
 		print $stdout "-- select() loops forever\n" if ($verbose);
 		$0 = "Texapp (select forever; $stuck_stdin re-reads)";
@@ -3909,11 +3939,10 @@ RESTART_SELECT:
 		print $stdout "-- select pending ($actualtime sec left)\n"
 			if ($superverbose);
 		$0 = "Texapp (select pending; $actualtime sec timeout; $stuck_stdin re-reads)";
-		if ($actualtime <= 0) {
-			$nfound = 0;
-		} else {
-			$nfound = select(
-				$rout = $rin, undef, undef, $actualtime);
+		$nfound = 0;
+		if ($actualtime > 0) {
+			$nfound = select($rout = $rin,
+				undef, undef, $actualtime);
 		}
 	}
 	if ($nfound > 0) {
@@ -3994,6 +4023,7 @@ EOF
 			$json_ref = &parsejson($buf);
 			push(@events, $json_ref);
 
+			# XXX have this emit to the stack
 			if (scalar(@events) > $eventbuf || (scalar(@events) &&
 					(time()-$lasteventtime) > $effpause)){
 				sleep 5 while ($suspend_output > 0);
@@ -4010,10 +4040,8 @@ EOF
 		# then, check if there is data on our control socket.
 		# command packets should always be (initially) 20 characters.
 		# if we come up short, it's either a bug, signal or timeout.
+		# signals should have been suppressed by this point.
 		$0 = "Texapp (receiving IPC)";
-		if ($we_got_signal) {
-			goto RESTART_SELECT;
-		}
 		goto RESTART_SELECT if(vec($rout, fileno(STDIN), 1) != 1);
 		print $stdout "-- waiting for data ", scalar localtime, "\n"
 			if ($superverbose);
@@ -4037,7 +4065,7 @@ EOF
 		print $stdout "-- command received ", scalar
 				localtime, " $rout" if ($verbose);
 		if ($rout =~ /^rsga/) {
-			$suspend_output = 0; # reset our status
+			$suspend_output = -1; # reset our status
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^pipet (..)/) {
 			my $key = &get_post($1);
@@ -4147,6 +4175,10 @@ EOF
 				sysread(STDIN, $value, 1024);
 				$value =~ s/\s+$//;
 				$interactive = ($comm eq '+') ? 0 : 1;
+				&send_removereadline if
+					($termrl &&
+						($interactive || $verbose));
+				$wrapseq = 1; 
 				if ($key eq 'tquery') {
 					print $stdout
 					"*** custom query installed\n"
@@ -4195,6 +4227,8 @@ EOF
 					&filterats_compile
 						if ($key eq 'filterats');
 				}
+				&send_repaint if ($termrl &&
+						($interactive || $verbose));
 			}
 			goto RESTART_SELECT;
 		} else {
@@ -4209,7 +4243,7 @@ EOF
 			}
 		}
 	} else {
-		if ($we_got_signal || $nfound == -1) {
+		if ($nfound == -1) {
 			# we need to restart the call. we might be waiting
 			# longer, but this is unavoidable.
 			goto RESTART_SELECT;
@@ -6706,14 +6740,13 @@ sub synckey {
 	my $value = shift;
 	my $interactive = 0+shift;
 	my $commchar = ($interactive) ? '=' : '+';
+	return if (!$child); 
 	print $stdout "*** (transmitting to background)\n"
 		if ($interactive || $verbose);
-	return if (!$child); 
-	kill $SIGUSR2, $child if ($child);
+	kill $SIGUSR2, $child;
 	print C
 	(substr("${commchar}$key                           ", 0, 19) . "\n");
 	print C (substr(($value . $space_pad), 0, 1024));
-	sleep 1;
 }
 
 # getter for internal variables. right now this just returns the variable by
@@ -7188,7 +7221,9 @@ sub generate_otabcomp {
 		print $stdout "-readline=\"@keys\"\n";
 	}
 }
-sub end_me { exit; } # which falls through to, via END, ...
+sub end_me { 
+	print $stdout "-- end_me: @_\n" if ($verbose);
+	exit; } # which falls through to, via END, ...
 sub killkid {
 	# for streaming assistance
 	if ($child) {
@@ -7637,9 +7672,6 @@ sub parsejson {
 	# in particular, need to make sure nothing in this will eval badly or
 	# run arbitrary code. that would really suck!
 	# first, generate a syntax tree.
-	# this is thrown in eval brackets for strange errors @jnm got with
-	# Perl 5.10.
-my $rtn = eval {
 	$tdata = ""+$data;
 	1 while $tdata =~ s/'[^']*'//; # empty strings are valid too ...
 	$tdata =~ s/-?[0-9]+\.?[0-9]*([eE][+-][0-9]+)?//g;
@@ -7658,14 +7690,14 @@ my $rtn = eval {
 				|| ($tdata =~ /^\{/ && $tdata !~ /\}$/)) {
 			# incomplete transmission
 			&$exception(10, "*** JSON warning: connection cut\n");
-			return 2;
+			return undef;
 		}
 # it seems that :[], or :[]} should be accepted as valid in the syntax tree
 # since identica uses this as possible for null properties
 # ,[], shouldn't be, etc.
 		if ($tdata =~ /(^|[^:])\[\]($|[^},])/) { # oddity
 			&$exception(11, "*** JSON warning: null list\n");
-			return 2;
+			return undef;
 		}
 		# at this point all we should have are structural elements.
 		# if something other than JSON structure is visible, then
@@ -7681,7 +7713,7 @@ $data
 $tdata
 --- JSON PARSING ABORTED DUE TO SYNTAX TREE FAILURE --
 EOF
-			return 2;
+			return undef;
 		}
 	}
 
@@ -7690,20 +7722,8 @@ EOF
 	1 while
 	($data =~ s/([^'])'\s*:\s*(true|false|null|\'|\{|\[|-?[0-9])/\1\',\2/);
 
-	# removing whitespace to improve interpretation speed actually made
-	# it SLOWER.
-	#($data =~ s/'\s*,\s*/',/sg);
-	#($data =~ s/\n\s*//sg);
-
 	# finally, single quotes, just before interpretation.
 	$data =~ s/$ssqqmask/\\'/g;
-	return 1;
-};
-	if ($rtn != 1) {
-		return undef if ($rtn == 2); # controlled failure
-		&$exception(98, "*** internal Perl error: $@\n");
-		return undef;
-	}
 
 	# now somewhat validated, so safe (?) to eval() into a Perl struct
 	eval "\$my_json_ref = $data;";
