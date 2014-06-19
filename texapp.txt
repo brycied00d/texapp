@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "texapp";
 	$Texapp_VERSION = "0.2";
-	$Texapp_PATCH_VERSION = 2;
+	$Texapp_PATCH_VERSION = 3;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -57,7 +57,7 @@ BEGIN {
 		synch exception_is_maskable mentions simplestart
 		location readlinerepaint nocounter notifyquiet
 		signals_use_posix dostream nostreamreplies streamallreplies
-		nofilter
+		nofilter personal
 	); %opts_sync = map { $_ => 1 } qw(
 		ansi pause dmpause texappistas verbose superverbose
 		globalurl homeurl notco noifttt
@@ -626,7 +626,7 @@ $dont_refresh_first_time = 1 if (!$backload);
 $searchhits ||= 20;
 $globalurl ||= "${apibase}/posts/stream/global";
 $homeurl ||= "${apibase}/posts/stream";
-$url ||= $globalurl;
+$url ||= (($personal) ? $homeurl : $globalurl);
 
 $credurl ||= "${apibase}/token";
 $update ||= "${apibase}/posts";
@@ -709,6 +709,7 @@ $pause = (($anonymous) ? 120 : "auto") if (!defined $pause);
 $superverbose ||= 0;
 $avatar ||= "";
 $urlopen ||= 'echo %U';
+$alsopost ||= "";
 $hold ||= 0;
 $daemon ||= 0;
 $maxhist ||= 19;
@@ -4276,7 +4277,7 @@ sub refresh {
 	# add stream for replies, if requested
 	if ($mentions) {
 		# same thing
-		my $r = &grabjadn($rurl,
+		my $r = &grabjadn(&urlp($rurl),
 			($dostream && !$nostreamreplies) ? $last_id : $fetch_id,
 			0,
 			(($last_id) ? 250
@@ -4857,6 +4858,12 @@ EOF
 	unless ($user_name_dm || $rp_id) {
 		$lasttwit = $string;
 		&$postpost($string);
+	}
+	if (length($alsopost)) {
+		if(open(W, "|$alsopost")) {
+			print W "$string\n";
+			close(W);
+		}
 	}
 	return 0;
 }
