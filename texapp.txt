@@ -1,7 +1,7 @@
 #!/usr/bin/perl -s
 #########################################################################
 #
-# Texapp v0.2 (c)2012 cameron kaiser (and contributors).
+# Texapp v0.4 (c)2012-3 cameron kaiser (and contributors).
 # all rights reserved.
 # http://www.floodgap.com/software/texapp/
 #
@@ -29,8 +29,8 @@ BEGIN {
 	}
 	
 	$command_line = $0; $0 = "Texapp";
-	$Texapp_VERSION = "0.3";
-	$Texapp_PATCH_VERSION = 2;
+	$Texapp_VERSION = "0.4";
+	$Texapp_PATCH_VERSION = 0;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -59,24 +59,26 @@ BEGIN {
 		signals_use_posix dostream nostreamreplies streamallreplies
 		nofilter personal allats
 	); %opts_sync = map { $_ => 1 } qw(
-		ansi pause dmpause texappistas verbose superverbose
-		globalurl homeurl notco noifttt
-		url rlurl dmurl newline wrap notimeline lists dmidurl
+		ansi pause pmpause texappistas verbose superverbose
+		globalurl homeurl notco noifttt chanurl chanbyidurl
+		chansubbyidurl msbyidurl msbycidurl
+		chanmsbyidurl url rlurl newline wrap notimeline lists
 		queryurl track colourprompt colourme notrack
-		colourdm colourreply colourwarn coloursearch colourlist idurl
-		notifies filter colourdefault backload searchhits dmsenturl
+		colourpm colourreply colourwarn coloursearch colourlist idurl
+		notifies filter colourdefault backload searchhits
 		nostreamreplies mentions wtrendurl atrendurl filterusers
 		filterats filterrts filteratonly filterflags nofilter
 		colourfollow colouralien allats threads
 	); %opts_urls = map {$_ => 1} qw(
-		url dmurl uurl rurl wurl uidurl rlurl update shorturl
-		globalurl homeurl
-		apibase queryurl idurl delurl dmdelurl favsurl
+		url chanurl uurl rurl wurl uidurl rlurl update shorturl
+		globalurl homeurl chanbyidurl chanmsbyidurl
+		chansubbyidurl msbyidurl msbycidurl
+		apibase queryurl idurl delurl favsurl
 		favurl favdelurl followurl leaveurl
-		dmupdate credurl blockurl blockdelurl friendsurl
+		credurl blockurl blockdelurl friendsurl
 		modifyliurl adduliurl delliurl getliurl getlisurl getfliurl
 		creliurl delliurl deluliurl crefliurl delfliurl
-		getuliurl getufliurl dmsenturl rturl rpsofidurl dmidurl
+		getuliurl getufliurl rturl rpsofidurl
 		statusliurl followliurl leaveliurl followersurl mutedurl
 		oauthurl oauthauthurl oauthaccurl oauthbase wtrendurl
 		atrendurl favsofidurl intsofmeurl
@@ -90,22 +92,23 @@ BEGIN {
 	);
 
 	   %opts_can_set = map { $_ => 1 } qw(
-		url pause dmurl dmpause superverbose ansi verbose
-		globalurl homeurl notco noifttt
+		url pause chanurl pmpause superverbose ansi verbose
+		globalurl homeurl notco noifttt chanbyidurl chanmsbyidurl
+		chansubbyidurl msbyidurl msbycidurl
 		update uurl rurl wurl avatar texappistas track
 		rlurl noprompt shorturl newline wrap verify autosplit
 		notimeline queryurl colourprompt colourme
-		colourdm colourreply colourwarn coloursearch colourlist idurl
-		urlopen delurl notrack dmdelurl favsurl 
+		colourpm colourreply colourwarn coloursearch colourlist idurl
+		urlopen delurl notrack favsurl 
 		favurl favdelurl slowpost notifies filter colourdefault
 		colourfollow colouralien intsofmeurl
-		followurl leaveurl dmupdate mentions backload
+		followurl leaveurl mentions backload
 		lat long location searchhits blockurl blockdelurl woeid
 		nocounter linelength friendsurl followersurl lists mutedurl
 		modifyliurl adduliurl delliurl getliurl getlisurl getfliurl
 		creliurl delliurl deluliurl crefliurl delfliurl atrendurl
-		getuliurl getufliurl dmsenturl rturl rpsofidurl wtrendurl
-		statusliurl followliurl leaveliurl dmidurl nostreamreplies
+		getuliurl getufliurl rturl rpsofidurl wtrendurl
+		statusliurl followliurl leaveliurl nostreamreplies
 		filterusers filterats filterrts filterflags
 		filteratonly nofilter favsofidurl allats threads
 	); %opts_others = map { $_ => 1 } qw(
@@ -177,7 +180,7 @@ EOF
 
 	# defaults that our extensions can override
 	$last_id = 0;
-	$last_dm = 0;
+	$last_pm = 0;
 	# a correct fix for -daemon would make this unlimited, but this
 	# is good enough for now.
 	$print_max ||= ($daemon) ? 999999 : 250; # shiver
@@ -373,11 +376,13 @@ die("-script and -daemon cannot be used together.\n")
 $is_background = 0;
 $alphabet = "abcdefghijkLmnopqrstuvwxyz";
 %store_hash = ();
-$mini_split = 250; # i.e., 10 posts for the mini-menu (/th)
+$mini_split = 250; # i.e., 10 posts for the mini-menu (/th, foreground /pm)
 # leaving 50 posts for the foreground temporary menus
 $post_counter = 0;
-%dm_store_hash = ();
-$dm_counter = 0;
+%pm_store_hash = ();
+%pm_context_hash = ();
+%pm_context_cache = ();
+$pm_counter = 0;
 %id_cache = ();
 %filter_next = ();
 
@@ -445,7 +450,7 @@ if (length($exts) && $exts ne '0') {
 
 		# these methods are multi-module safe
 		foreach $arry (qw(
-			handle exception posttype conclude dmhandle dmconclude
+			handle exception posttype conclude pmhandle pmconclude
 			heartbeat precommand prepost postpost addaction
 			eventhandle listhandle userhandle shutdown)) {
 			if (defined($$arry)) {
@@ -479,8 +484,8 @@ if (length($exts) && $exts ne '0') {
 	$exception = \&multiexception;
 	$posttype = \&multiposttype;
 	$conclude = \&multiconclude;
-	$dmhandle = \&multidmhandle;
-	$dmconclude = \&multidmconclude;
+	$pmhandle = \&multipmhandle;
+	$pmconclude = \&multipmconclude;
 	$heartbeat = \&multiheartbeat;
 	$precommand = \&multiprecommand;
 	$prepost = \&multiprepost;
@@ -500,8 +505,8 @@ if (length($exts) && $exts ne '0') {
 	$exception = \&defaultexception;
 	$posttype = \&defaultposttype;
 	$conclude = \&defaultconclude;
-	$dmhandle = \&defaultdmhandle;
-	$dmconclude = \&defaultdmconclude;
+	$pmhandle = \&defaultpmhandle;
+	$pmconclude = \&defaultpmconclude;
 	$heartbeat = \&defaultheartbeat;
 	$precommand = \&defaultprecommand;
 	$prepost = \&defaultprepost;
@@ -663,13 +668,15 @@ $rpurl ||= "${apibase}/posts/%I/repost";
 $rpsofidurl ||= "${apibase}/posts/%I/reposters";
 $intsofmeurl ||= "${apibase}/users/me/interactions";
 
-# not supported yet #
-$dmurl ||= "${apibase}/direct_messages.json";
-$dmsenturl ||= "${apibase}/direct_messages/sent.json";
-$dmupdate ||= "${apibase}/direct_messages/new.json";
-$dmdelurl ||= "${apibase}/direct_messages/destroy";
-$dmidurl ||= "${apibase}/direct_messages/show";
-# not supported yet #
+# channels, channel messages and pms/PMs
+$chanurl ||= "${apibase}/channels";
+$chanbyidurl ||= "${apibase}/channels/%I";
+$chanmsbyidurl ||= "${apibase}/channels/%I/messages"; # also POST
+$chansubbyidurl ||= "${apibase}/channels/%I/subscribe"; # also DELETE
+$msbyidurl ||= "${apibase}/channels/messages";
+$msbycidurl ||= "${apibase}/channels/%U/messages/%I"; # also DELETE
+	# %U in this case is the cid
+# ^^ see http://developers.app.net/docs/resources/message/lifecycle/
 
 # not supported yet #
 $getlisurl ||= "${apibase}/lists.json";
@@ -725,9 +732,9 @@ $slowpost ||= 0;
 $twarg ||= undef;
 
 $verbose ||= $superverbose;
-$dmpause = 4 if (!defined $dmpause); # NOT ||= ... zero is a VALID value!
-$dmpause = 0 if ($anonymous);
-$dmpause = 0 if ($pause eq '0');
+$pmpause = 3 if (!defined $pmpause); # NOT ||= ... zero is a VALID value!
+$pmpause = 0 if ($anonymous);
+$pmpause = 0 if ($pause eq '0');
 $ansi = ($noansi) ? 0 :
 	(($ansi || $ENV{'TERM'} eq 'ansi' || $ENV{'TERM'} eq 'xterm-color')
 		? 1 : 0);
@@ -735,16 +742,16 @@ $ansi = ($noansi) ? 0 :
 # synch overrides these options.
 if ($synch) {
 	$pause = 0;
-	$dmpause = ($dmpause) ? 1 : 0;
+	$pmpause = ($pmpause) ? 1 : 0;
 }
 
-$dmcount = $dmpause;
+$pmcount = $pmpause;
 $lastshort = undef;
 
 # ANSI sequences
 $colourprompt ||= "CYAN";
 $colourme ||= "YELLOW";
-$colourdm ||= "GREEN";
+$colourpm ||= "GREEN";
 $colourreply ||= "RED";
 $colourwarn ||= "MAGENTA";
 $coloursearch ||= "CYAN";
@@ -781,7 +788,6 @@ $baseagent = $wend;
 #
 $nostream = 1;
 $notrack = 1;
-$dmpause = 0;
 $pause = 20 if ($pause eq 'auto');
 #
 # these overrides set options we know will work/force options off that don't
@@ -830,8 +836,9 @@ $simple_agent = "$baseagent -s -m 20";
 @wend = ('-s', '-m', '20', '-A', "Texapp/$Texapp_VERSION",
 		'-H', 'Expect:');
 @wind = @wend;
-@wend = (@wend, '-X', 'POST');
 @wdnd = (@wend, '-X', 'DELETE');
+@wend = (@wend, '-X', 'POST');
+@wjnd = (@wend, '-H', '"Content-Type: application/json"');
 $stringify_args = sub {
 	my $basecom = shift;
 	my $resource = shift;
@@ -860,6 +867,7 @@ $stringify_args = sub {
 	$resource = join('?', @{ $resource })
 		if (ref($resource) eq 'ARRAY');
 	$l .= "url = \"$resource\"\n";
+	$data = &escape_qq($data);
 	$l .= "data = \"$data\"\n" if length($data);
 	return ("$basecom -K -", $l, undef);
 };
@@ -1104,7 +1112,7 @@ if ($daemon) {
 			vec($rin, fileno(STBUF), 1) = 1;
 		}
 		$parent = 0;
-		$dmcount = 1 if ($dmpause); # force fetch
+		$pmcount = 1 if ($pmpause); # force fetch
 		$is_background = 1;
 		DAEMONLOOP: for(;;) {
 			my $snooze;
@@ -1115,10 +1123,10 @@ if ($daemon) {
 			&update_effpause;
 			&refresh(0);
 			$dont_refresh_first_time = 0;
-			if ($dmpause) {
-				if (!--$dmcount) {
-					&dmrefresh(0);
-					$dmcount = $dmpause;
+			if ($pmpause) {
+				if (!--$pmcount) {
+					&pmrefresh(0);
+					$pmcount = $pmpause;
 				}
 			}
 			# service events on the streaming socket, if
@@ -1201,7 +1209,7 @@ $V = "${Texapp_VERSION}.${padded_patch_version}";
 $e = <<'EOF';
 
 ${RED} /\      /\${OFF}   ${CYAN}################################################################${OFF}
-${RED}/ ${YELLOW}M${RED}\    /${YELLOW}M${RED} \  ${CYAN}#${OFF}             ${EM}texapp ${V} (c)2012 cameron kaiser${OFF}             ${CYAN}#${OFF}
+${RED}/ ${YELLOW}M${RED}\    /${YELLOW}M${RED} \  ${CYAN}#${OFF}             ${EM}texapp ${V} (c)2013 cameron kaiser${OFF}             ${CYAN}#${OFF}
 ${RED}\ ${YELLOW}MM${RED}\  /${YELLOW}MM${RED} /  ${CYAN}#${OFF}                                                              ${CYAN}#${OFF}
 ${RED} \ ${YELLOW}MM${RED}\/${YELLOW}MM${RED} /   ${CYAN}#${OFF}          based on TTYtter 2.1 - all rights reserved.         ${CYAN}#${OFF}
 ${RED}  \ ${YELLOW}MMMM${RED} /    ${CYAN}#${OFF}       freeware under the Floodgap Free Software License      ${CYAN}#${OFF}
@@ -1218,7 +1226,7 @@ EOF
 	$e =~ s/\$\{([A-Z]+)\}/${$1}/eg; print $stdout $e;
 } else {
 	print <<"EOF";
-Texapp ${Texapp_VERSION}.${padded_patch_version} (c)2012 cameron kaiser
+Texapp ${Texapp_VERSION}.${padded_patch_version} (c)2013 cameron kaiser
 all rights reserved. freeware under the floodgap free software license.
 http://www.floodgap.com/software/ffsl/
 
@@ -1531,83 +1539,111 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	# dumper
 	if (m#^/du(mp)? ([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($2);
-		unless ($code =~ /^d[0-9][0-9]+$/) { # this is a DM.
-		my $post = &get_post($code);
+		unless ($code =~ /^[pP][zZ]?[a-zA-Z]?[0-9]+$/ # this is a PM.
+				&& $code !~ /^p[0-9]$/) {  # this is legal.
+			my $post = &get_post($code);
+			my $k;
+			my $sn;
+			my $id;
+			my @superfields = (
+				[ "user", "username" ], # must always be first
+				[ "repost_of", "id" ],
+				[ "_texapp_tag", "type" ],
+				[ "_texapp_tag", "payload" ],
+				[ "source", "name" ],
+			);
+			my $superfield;
+
+			if (!defined($post)) {
+				print $stdout "-- no such post (yet?): $code\n";
+				return 0;
+			}
+	
+			foreach $superfield (@superfields) {
+				my $sfn = join('->', @{ $superfield });
+				my $sfk = "{'" .
+					join("'}->{'", @{ $superfield }) .
+				"'}";
+				my $sfv;
+				eval "\$sfv = &descape(\$post->$sfk);";
+				print $stdout
+				substr("$sfn                          ", 0, 25).
+					" $sfv\n";
+				$sn = $sfv if (!length($sn) && length($sfv));
+			}
+			foreach $k (sort keys %{ $post }) {
+				next if (ref($post->{$k}));
+				print $stdout
+				substr("$k                          ", 0, 25) .
+					" " . &descape($post->{$k}) . "\n";
+			}
+			# include a URL to the post per T@augmentedfourth
+			$urlshort =
+			"${http_proto}://alpha.app.net/$sn/post/$post->{'id'}";
+			print $stdout
+			"-- %URL% is now $urlshort (/short to shorten)\n";
+			return 0;
+		} # if dxxxx, fall through to the below.
+	}
+
+	# PM dumper
+	if (m#^/du(mp)? ([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $code = lc($2);
+		my $pm = &get_pm($code);
 		my $k;
 		my $sn;
 		my $id;
 		my @superfields = (
 			[ "user", "username" ], # must always be first
-			[ "repost_of", "id" ],
-			[ "tag", "type" ],
-			[ "tag", "payload" ],
 			[ "source", "name" ],
 		);
 		my $superfield;
 
-		if (!defined($post)) {
-			print $stdout "-- no such post (yet?): $code\n";
+		if (!defined($pm) || ref($pm) ne 'HASH') {
+			print $stdout "-- no such PM (yet?): $code\n";
 			return 0;
 		}
+		my $context = undef;
+		# only fetch the context if we know we generated this,
+		# because otherwise we start doing ugly dereferencing.
+		$context = &get_pm_context($code)
+			unless (!defined($pm->{'_texapp_menu_select'}));
 	
 		foreach $superfield (@superfields) {
 			my $sfn = join('->', @{ $superfield });
 			my $sfk = "{'" . join("'}->{'", @{ $superfield }) .
 				"'}";
 			my $sfv;
-			eval "\$sfv = &descape(\$post->$sfk);";
-			print $stdout
-				substr("$sfn                          ", 0, 25).
-				" $sfv\n";
-			$sn = $sfv if (!length($sn) && length($sfv));
-		}
-		foreach $k (sort keys %{ $post }) {
-			next if (ref($post->{$k}));
-			print $stdout
-				substr("$k                          ", 0, 25) .
-					" " . &descape($post->{$k}) . "\n";
-		}
-		# include a URL to the post per T@augmentedfourth
-		$urlshort =
-		"${http_proto}://alpha.app.net/$sn/post/$post->{'id'}";
-		print $stdout
-			"-- %URL% is now $urlshort (/short to shorten)\n";
-		return 0;
-		} # if dxxxx, fall through to the below.
-	}
-
-	if (m#^/du(mp)? ([dD][a-zA-Z]?[0-9]+)$#) {
-		my $code = lc($2);
-		my $dm = &get_dm($code);
-		my $k;
-		my $sn;
-		my $id;
-		my @superfields = (
-			[ "sender", "username" ], # must always be first
-		);
-
-		if (!defined($dm)) {
-			print $stdout "-- no such DM (yet?): $code\n";
-			return 0;
-		}
-	
-		foreach $superfield (@superfields) {
-			my $sfn = join('->', @{ $superfield });
-			my $sfk = "{'" . join("'}->{'", @{ $superfield }) .
-				"'}";
-			my $sfv;
-			eval "\$sfv = &descape(\$dm->$sfk);";
+			eval "\$sfv = &descape(\$pm->$sfk);";
 			print $stdout
 				substr("$sfn                          ", 0, 25).
 				" $sfv\n";
 			$sn = $sfv if (!length($sn) && length($sfv));
 		}
 
-		foreach $k (sort keys %{ $dm }) {
-			next if (ref($dm->{$k}));
+		foreach $k (sort keys %{ $pm }) {
+			next if (ref($pm->{$k}));
 			print $stdout
 				substr("$k                          ", 0, 25) .
-					" " . &descape($dm->{$k}) . "\n";
+					" " . &descape($pm->{$k}) . "\n";
+		}
+
+		# if we didn't generate this, there is no context to iterate.
+		return 0 if (!defined($context));
+
+		print $stdout "\n_texapp_context\n---------------\n";
+		# this is a synthetic object we generate, so we don't need to
+		# be quite so paranoid.
+		foreach $k (sort keys %{ $context }) {
+			$m = $context->{$k};
+			print $stdout
+				substr("$k                          ", 0, 25)
+				. " ";
+			if (ref($m) eq 'ARRAY') {
+				print $stdout join(" ", @{ $m }), "\n";
+			} else {
+				print $stdout "$m\n";
+			}
 		}
 		return 0;
 	}
@@ -2001,7 +2037,9 @@ if(0) {
 	# thread-id based threading
 	if (m#^/th(read)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $countmaybe = $2;
-		my $code = lc($3);
+		my $code = $3;
+		unless ($code =~ /^P/) {
+		$code = lc($code);
 		my $post = &get_post($code);
 		if (!defined($post) || !$post->{'id'}) {
 			print $stdout "-- no such post (yet?): $code\n";
@@ -2029,6 +2067,7 @@ if(0) {
 		}
 		&dt_tdisplay($json_ref, 'thread', 0, $id);
 		return 0;
+		}
 	}
 	if (m#^/th(read)?f(ollow)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($3);
@@ -2052,6 +2091,12 @@ if(0) {
 			return 0;
 		}
 		$_ = "/del threads ".($post->{'thread_id'} || $post->{'id'});
+		# and fall through
+	}
+
+	# PM threading (alias /th on a PM to /pma)
+	if (m#^/th(read)?\s+(\+\d+\s+)?([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
+		$_ = "/pma $2$3";
 		# and fall through
 	}
 
@@ -2240,7 +2285,7 @@ For more, like readline support, UTF-8, SSL, proxies, etc., see the docs.
 
 ** READ THE COMPLETE DOCUMENTATION: http://www.floodgap.com/software/texapp/
 
- Texapp $Texapp_VERSION is (c)2012 cameron kaiser + contributors.
+ Texapp $Texapp_VERSION is (c)2013 cameron kaiser + contributors.
  all rights reserved. this software is offered AS IS, with no guarantees. it
  is not endorsed by App.net or their executive staff or operators.
 
@@ -2508,8 +2553,8 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		return 0;
 	}
 
-	# pull out entities. this works for DMs and posts.
-	if (m#^/ent?(ities)? ([dDzZ]?[a-zA-Z]?[0-9]+)$#) {
+	# pull out entities. this works for PMs and posts.
+	if (m#^/ent?(ities)? ([pP]?[zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $v;
 		my $w;
 		my $thing;
@@ -2522,23 +2567,26 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 			$hash = { "id" => $code };
 			$thing = "post";
 			$genurl = $idurl;
-		} elsif ($code =~ /^d.[0-9]+$/) {
-			$hash = &get_dm($code);
-			$thing = "DM";
-			$genurl = $dmidurl;
+		} elsif ($code =~ /^P[0-9]+$/ || $code =~ /^[pP][a-zA-Z]/) {
+			# we can't use that optimization here because we need
+			# the CID for PMs.
+			$hash = &get_pm($code);
+			$thing = "PM";
+			$genurl = $msbycidurl;
 		} else {
 			$hash = &get_original_post($code);
 			$thing = "post";
 			$genurl = $idurl;
 		}
 
-		if (!defined($hash)) {
+		if (!defined($hash) || ref($hash) ne 'HASH') {
 			print $stdout "-- no such $thing (yet?): $code\n";
 			return 0;
 		}
 
 		my $id = $hash->{'id'};
-		$hash = &grabjadn(&urlp($genurl,,$id), 0, 0, 0, undef, 1);
+		my $cid = $hash->{'channel_id'}; # this may be null
+		$hash = &grabjadn(&urlp($genurl,$cid,$id), 0, 0, 0, undef, 1);
 		if (!defined($hash) || ref($hash) ne 'HASH') {
 		print $stdout "-- failed to get entities from server, sorry\n";
 				return 0;
@@ -2578,23 +2626,24 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		&openurl($_);
 		return 0;
 	}
-	if (m#^/(url|open) ([dDzZ]?[a-zA-Z]?[0-9]+)$#) {
+	if (m#^/(url|open) ([pP]?[zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($2);
 		my $post;
 		my $genurl = undef;
 		$urlshort = undef;
 
-		if ($code =~ /^d/ && length($code) > 2) {
-			$post = &get_dm($code); # USO!
-			if (!defined($post)) {
+		if ($code =~ /^P[0-9]+$/ ||
+				$code =~ /^[pP][zZ]?[a-zA-Z][0-9]$/) {
+			$post = &get_pm($code);
+			if (!defined($post) || ref($post) ne 'HASH') {
 				print $stdout
-					"-- no such DM (yet?): $code\n";
+					"-- no such PM (yet?): $code\n";
 				return 0;
 			}
-			$genurl = $dmidurl;
+			$genurl = $msbycidurl;
 		} else {
 			$post = &get_post($code);
-			if (!defined($post)) {
+			if (!defined($post) || ref($post) ne 'HASH') {
 				print $stdout
 					"-- no such post (yet?): $code\n";
 				return 0;
@@ -2606,13 +2655,14 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		# can open those too. this is a tiny version of /entities.
 		if($post->{'_texapp_has_entity_links'}) {
 			my $id = $post->{'id'};
+			my $cid = $post->{'channel_id'}; # may be null
 			my $hash;
 
 			# only fetch if we have to. if we already fetched
 			# because we were given a direct id instead of a
 			# menu code, then we already have the entities.
-			if ($code !~ /^[0-9]+$/) {
-				$hash = &grabjadn(&urlp($genurl,,$id),
+			if ($code !~ /^[0-9]+$/ && $code !~ /^P[0-9]+$/) {
+				$hash = &grabjadn(&urlp($genurl,$cid,$id),
 					0, 0, 0, undef, 1);
 			} else {
 				# MAKE MONEY FAST WITH OUR QUICK CACHE PLAN
@@ -2769,7 +2819,7 @@ m#^/(un)?[fs](rt|rp|repost|tar|a|av|ave|avorite|avourite)? ([zZ]?[a-zA-Z]?[0-9]+
 		$_ = (length) ? "$repost $_" : $repost;
 		print $stdout &wwrap("(expanded to \"$_\")");
 		print $stdout "\n";
-		goto TWEETPRINT; # fugly! FUGLY!
+		goto BOTTOMSUP; # fugly! FUGLY!
 	}
 
 	# /events (subsumes /rtom /stom) from Interactions API
@@ -2893,8 +2943,9 @@ if(0) {
 }
 
 	if (m#^/del(ete)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
-		my $code = lc($2);
-		unless ($code =~ /^d[0-9][0-9]+$/) { # this is a DM.
+		my $code = $2;
+		unless ($code =~ /^p[0-9][0-9]+$/ || $code =~/^P/) { # is a PM
+		$code = lc($code);
 		my $post = &get_post($code);
 		if (!defined($post)) {
 			print $stdout "-- no such post (yet?): $code\n";
@@ -2918,28 +2969,32 @@ if(0) {
 		$lastpostid = -1 if ($post->{'id'} == $lastpostid);
 		&deletest($post->{'id'}, 1);
 		return 0;
-		} # dxxx falls through to ...
+		} # Pxxx falls through to ...
 	}
-	# DM delete version
-	if (m#^/del(ete)? ([dD][a-zA-Z]?[0-9]+)$#) {
+	# PM delete version
+	if (m#^/del(ete)? ([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($2);
-		my $dm = &get_dm($code);
-		if (!defined($dm)) {
-			print $stdout "-- no such DM (yet?): $code\n";
+		my $pm = &get_pm($code);
+		if (!defined($pm)) {
+			print $stdout "-- no such PM (yet?): $code\n";
+			return 0;
+		}
+		if (lc(&descape($pm->{'user'}->{'username'})) ne $whoami) {
+			print $stdout
+		"-- you can't delete that, it's not your PM!\n";
 			return 0;
 		}
 		print $stdout &wwrap(
 			"-- verify you want to delete: " .
-		"(from @{[ &descape($dm->{'sender'}->{'username'}) ]}) ".
-			"\"@{[ &descape($dm->{'text'}) ]}\"");
+			"\"@{[ &descape($pm->{'text'}) ]}\"");
 		print $stdout "\n";
 		$answer = lc(&linein(
 	"-- sure you want to delete? (only y or Y is affirmative):"));
 		if ($answer ne 'y') {
-			print $stdout "-- ok, DM is NOT deleted.\n";
+			print $stdout "-- ok, PM is NOT deleted.\n";
 			return 0;
 		}
-		&deletedm($dm->{'id'}, 1);
+		&deletepm($pm->{'id'}, $pm->{'channel_id'}, 1);
 		return 0;
 	}
 	# /deletelast
@@ -2966,7 +3021,7 @@ if(0) {
 		return 0;
 	}
 
-	# /rg is a /reply with no @ information (thus no /v-ariant)
+	# /rg is a /reply with no @ information (thus no /v-ariant) "global"
 	if (s#^/re?p?l?y?g(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
 		my $dof = ($1 eq 'f') ? 1 : 0;
 		my $code = lc($2);
@@ -2978,58 +3033,59 @@ if(0) {
 		&add_thread($post->{'thread_id'}) if ($dof);
 		$in_reply_to = $post->{'id'};
 		$expected_post_ref = $post;
-		goto TWEETPRINT; # fugly! FUGLY!
+		goto BOTTOMSUP; # fugly! FUGLY!
 	}
 
-	# /vreply and DM and regular /reply
-	if (s#^/(v)?re(ply)?(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
+	# /vreply and PM and regular /reply
+	if (s#^/(v)?re(ply)?(f)? ([pP]?[zZ]?[a-zA-Z][0-9]) ## && length) {
 		my $mode = $1;
 		my $dof = ($3 eq 'f') ? 1 : 0;
 		my $code = lc($4);
-		unless ($code =~ /^d[0-9][0-9]+/) { # this is a DM
-		my $post = &get_original_post($code);
-		if (!defined($post)) {
-			print $stdout "-- no such post (yet?): $code\n";
-			return 0;
-		}
-		my $target = &descape($post->{'user'}->{'username'});
-		$_ = '@' . $target . " $_";
-		unless ($mode eq 'v') {
-			$in_reply_to = $post->{'id'};
-			$expected_post_ref = $post;
+		unless ($code =~ /^p/ && length($code) > 2) { # this is a PM
+			my $post = &get_original_post($code);
+			if (!defined($post)) {
+				print $stdout "-- no such post (yet?): $code\n";
+				return 0;
+			}
+			my $target = &descape($post->{'user'}->{'username'});
+			$_ = '@' . $target . " $_";
+			unless ($mode eq 'v') {
+				$in_reply_to = $post->{'id'};
+				$expected_post_ref = $post;
+			} else {
+				$_ = ".$_";
+			}
+			$readline_completion{'@'.lc($target)}++ if ($termrl);
+			&add_thread($post->{'thread_id'}) if ($dof);
+			print $stdout &wwrap("(expanded to \"$_\")");
+			print $stdout "\n";
+			goto BOTTOMSUP; # fugly! FUGLY!
 		} else {
-			$_ = ".$_";
-		}
-		$readline_completion{'@'.lc($target)}++ if ($termrl);
-		&add_thread($post->{'thread_id'}) if ($dof);
-		print $stdout &wwrap("(expanded to \"$_\")");
-		print $stdout "\n";
-		goto TWEETPRINT; # fugly! FUGLY!
-		}  else {
-			# this is a DM, reconstruct it
-			$_ = "/${mode}re $code $_";
-			# and fall through to ...
+			# this is a PM. unlike TTYtter, which fell through to
+			# /dm, this actually gets the channel context and does
+			# the post itself.
+			my $context = &get_pm_context($code);
+			if (!defined($context)) {
+				print $stdout "-- no such PM (yet?): $code\n";
+				return 0;
+			}
+			# tag with the menu code so that splitting works.
+			my $new_context = {
+				'menu_code', $code,
+				'context', $context
+			};
+			$rv = &common_split_post($_, undef, $new_context);
+			&pmthump if ($rv && $pmpause);
+			return $rv;
 		}
 	}
-	# DM reply version
-	if (s#^/(dm)?re(ply)? ([dD][a-zA-Z]?[0-9]+) ## && length) {
-		my $code = lc($3);
-		my $dm = &get_dm($code);
-		if (!defined($dm)) {
-			print $stdout "-- no such DM (yet?): $code\n";
-			return 0;
-		}
-		# in the future, add DM in_reply_to here
-		my $target = &descape($dm->{'sender'}->{'username'});
-		$readline_completion{'@'.lc($target)}++ if ($termrl);
-		$_ = "/dm $target $_";
-		print $stdout &wwrap("(expanded to \"$_\")");
-		print $stdout "\n";
-		# and fall through to /dm
-	}
-	# replyall (based on @FunnelFiasco's extension)
-	if (s#^/(v)?r(eply)?(to)?a(ll)?(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## &&length){
+
+	# replyall (based on @FunnelFiasco's extension) and replyhighlight
+	# (uses all logic, but puts direct referent in first position and
+	# remainder at rear)
+	if (s#^/(v)?r(eply)?(to)?(al?l?|hi?l?i?t?e?)(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## &&length){
 		my $mode = $1;
+		my $appendtype = (substr($4, 0, 1) eq 'a') ? 'a' : 'h';
 		my $dof = ($5 eq 'f') ? 1 : 0;
 		my $code = lc($6);
 
@@ -3065,7 +3121,11 @@ if(0) {
 			my $name = $1;
 			my $mame = lc($name); # preserve camel case
 			next if ($mame eq $whoami || $did_mentions{$mame}++);
-			$_ .= " \@$name";
+			if ($appendtype eq 'a') {
+				$_ .= " \@$name";
+			} else {
+				$text .= " \@$name";
+			}
 		}
 		$_ .= " $text";
 
@@ -3077,7 +3137,7 @@ if(0) {
 		# and fall through to post
 		print $stdout &wwrap("(expanded to \"$_\")");
 		print $stdout "\n";
-		goto TWEETPRINT; # fugly! FUGLY!
+		goto BOTTOMSUP; # fugly! FUGLY!
 	}
 
 	if (m#^/re(plies)?(\s+\+\d+)?$#) {
@@ -3101,31 +3161,99 @@ if(0) {
 		return 0;
 	}
 
-	# DMs
-	if ($_ eq '/dm' || $_ eq '/dmrefresh' || $_ eq '/dmr') {
-		&dmthump;
+	# PMs
+	if ($_ eq '/dm' || $_ eq '/pmrefresh' || $_ eq '/dmrefresh' ||
+			$_ eq '/pm' || $_ eq '/dmr') {
+		&pmthump;
 		return 0;
 	}
-	# /dmsent, /dmagain
-	if (m#^/dm(s|sent|a|again)(\s+\+\d+)?$#) {
-		my $mode = $1;
-		my $countmaybe = $2;
-		$countmaybe =~ s/[^\d]//g if (length($countmaybe));
-		$countmaybe += 0;
-		if ($countmaybe > 999) {
-			print $stdout "-- greedy bastard, try +fewer.\n";
+
+	if ($_ eq '/pmscan') { &pmscan; return 0; }
+
+	# /pmagain
+	if (m#^/pmag?a?i?n?(\s+\+\d+)?\s+([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $countmaybe = 0+$1;
+		my $code = lc($2);
+		my $context;
+
+		if ($code =~ /^p[0-9]+$/) {
+			# we have to get the PM and the channel first.
+			my $pm_ref = &get_pm($code);
+			if (!$pm_ref || ref($pm_ref) ne 'HASH' ||
+					!defined($pm_ref->{'channel_id'})) {
+				print $stdout "-- no such PM (yet?): $code\n";
+				return 0;
+			}
+			# get the channel and turn it into a context.
+			my $cid = $pm_ref->{'channel_id'};
+			my $json_ref = &grabjadn(&urlp($chanbyidurl,,$cid),
+				0, 0, 0);
+			if (!$json_ref || ref($json_ref) ne 'HASH' ||
+					!defined($json_ref->{'id'})) {
+				print $stdout
+					"-- failed to get channel for $code\n";
+				return 0;
+			}
+			$context = &pmchanneltocontext($json_ref);
+		} else {
+			$context = &get_pm_context($code);
+			if (!defined($context->{'id'})) {
+				print $stdout "-- invalid channel (deleted?)\n";
+				return 0;
+			}
+		}
+
+		my $cid = $context->{'id'};
+		my $json_ref = &grabjadn(&urlp($chanmsbyidurl,,$cid),
+			0, 0, $countmaybe);
+		return if (ref($json_ref) ne 'ARRAY');
+
+		foreach $k (sort { $a->{'id'} <=> $b->{'id'} } @{ $json_ref }) {
+			&assign_pm_key($k, $context);
+			&pmoutstack($k, $context);		
+		}
+		return 0;
+	}
+
+	# PM multiple users
+	if (s#^/pmm\s+(.+)\s+--\s+## && length) {
+		my @targets = grep { length($_) } split(/\s+/, $1);
+		if (!scalar(@targets)) {
+			print $stdout "-- couldn't find valid recipients\n";
 			return 0;
 		}
-		$countmaybe = sprintf("%03i", $countmaybe);
-		print $stdout "-- background request sent\n" unless ($synch);
-		
-		$mode = ($mode =~ /^s/) ? 's' : 'd';
-		print C "${mode}mreset${countmaybe}---------\n";
-		&sync_semaphore;
-		return 0;
+		$rv = &common_split_post($_, undef, \@targets);
+		&pmthump if ($rv);
+		return $rv;
 	}
-	if (s#^/dm \@?([^\s]+)\s+## && length)  {
-		return &common_split_post($_, undef, $1);
+	# PM just one user
+	if (s#^/pm \@?([^\s]+)\s+## && length)  {
+		$rv = &common_split_post($_, undef, $1);
+		&pmthump if ($rv);
+		return $rv;
+	}
+	# /pmclose
+	# we don't support PM IDs here. give me a reason why.
+	if (m#^/pmclose\s+([pP][zZ]?[a-zA-Z][0-9])$#) {
+		my $code = lc($1);
+		my $context = &get_pm_context($code);
+		if (!$context || ref($context) ne 'HASH' ||
+				!defined($context->{'id'})) {
+			print $stdout "-- can't find channel for PM $code\n";
+			return 0;
+		}
+		my $pm = &get_pm($code);
+		print $stdout &wwrap(
+"-- verify you want to close this channel: \"@{[ &descape($pm->{'text'}) ]}\"");
+		print $stdout "\n";
+		$answer = lc(&linein(
+	"-- sure you want to close channel? (only y or Y is affirmative):"));
+		if ($answer ne 'y') {
+			print $stdout "-- ok, channel is STILL ACTIVE.\n";
+			return 0;
+		}
+		&uorschannel($context->{'id'}, 1, 'un'); # XXXX
+		return 0;
 	}
 
 	# follow and leave users
@@ -3456,26 +3584,56 @@ EOF
 		s#^/##; # leave the second slash on
 	}
 
-TWEETPRINT: # fugly! FUGLY!
+BOTTOMSUP: # fugly! FUGLY!
 	$rv = &common_split_post($_, $in_reply_to, undef);
 	&thump if ($rv);
 	return $rv;
 }
 
-# this is the common code used by standard updates and by the /dm command.
+# this is the common code used by standard updates and by the /pm command.
 sub common_split_post {
 	my $k = shift;
 	my $in_reply_to = shift;
-	my $dm_user = shift;
+	my $pm_user = shift;
+	my $pm_lead = '';
+	my $pm_context = $pm_user;
 	
-	my $dm_lead = (length($dm_user)) ? "/dm $dm_user " : '';
-	my $ol = "$dm_lead$k";
+	# if pm_user is a hashref, it's probably an annotated context from
+	# the /reply command. try to unwrap it.
+	if (ref($pm_user) eq 'HASH') {
+		if (length($pm_user->{'menu_code'})) {
+			# it's annotated with a menu code. use that and then
+			# extract the context to feed to &updatest.
+			$pm_lead = "/re $pm_user->{'menu_code'} ";
+			$pm_context = $pm_user->{'context'};
+		} else {
+			# it's a naked context. if a single user, use /pm; if a
+			# multiuser channel, use /pmm.
+			my @unames = &users_not_me(@{ $pm_user->{'users'} });
+			if (!scalar(@unames)) {
+				# uh ... just guess it was us talking to us?
+				$pm_lead = "/pm $whoami ";
+			} elsif (scalar(@unames) == 1) {
+				$pm_lead = "/pm $unames[0] ";
+			} else {
+				$pm_lead = "/pmm " . join(' ', @unames) .
+					" -- ";
+			}
+		}
+	} elsif(ref($pm_user) eq 'ARRAY') {
+		# it's a list of names from /pmm
+		$pm_lead = "/pmm " . join(' ', @{ $pm_user }) .  " -- ";
+	} elsif(length($pm_user)) {
+		# it's not a context or arrayref, just a user name.
+		$pm_lead = "/pm $pm_user ";
+	}
+	my $ol = "$pm_lead$k";
 
 	my (@poststack) = &csplit($k, ($autosplit eq 'char' ||
 		$autosplit eq 'cut') ? 1 : 0);
 	my $m = shift(@poststack);
 	if (scalar(@poststack)) {
-		$l = "$dm_lead$m";
+		$l = "$pm_lead$m";
 		$history[0] = $l;
 		if (!$autosplit) {
 			print $stdout &wwrap(
@@ -3488,13 +3646,13 @@ sub common_split_post {
 			"*** over $linelength; autosplitting to \"$l\"\n");
 	}
 	# there was an error; stop autosplit, restore original command
-	if (&updatest($m, 1, $in_reply_to, $dm_user)) {
+	if (&updatest($m, 1, $in_reply_to, $pm_context)) {
 		$history[0] = $ol;
 		return 0;
 	}
 	if (scalar(@poststack)) {
 		$k = shift(@poststack);
-		$l = "$dm_lead$k";
+		$l = "$pm_lead$k";
 		&add_history($l);
 		print $stdout &wwrap("*** next part is ready: \"$l\"\n");
 		print $stdout "*** (this will also be automatically split)\n"
@@ -3589,7 +3747,7 @@ sub sub_helper {
 # GA semaphore from the background before printing another prompt.
 sub sync_console {
 	&thump;
-	&dmthump unless (!$dmpause);
+	&pmthump unless (!$pmpause);
 }
 sub sync_semaphore {
 	if ($synch) {
@@ -3679,7 +3837,7 @@ if ($dostream) {
 $interactive = $previous_last_id = $we_got_signal = 0;
 $suspend_output = -1;
 $stream_failure = 0;
-$dm_first_time = ($dmpause) ? 1 : 0;
+$pm_first_time = ($pmpause) ? 1 : 0;
 $stuck_stdin = 0;
 
 # tell the foreground we are ready
@@ -3696,20 +3854,20 @@ for(;;) {
 		(!$effpause && !$interactive);
 	$dont_refresh_first_time = 0;
 	$previous_last_id = $last_id;
-	if ($dmpause && ($effpause || $synch)) {
-		if ($dm_first_time) {
-			&dmrefresh(0);
-			$dmcount = $dmpause;
+	if ($pmpause && ($effpause || $synch)) {
+		if ($pm_first_time) {
+			&pmrefresh(0);
+			$pmcount = $pmpause;
 		} elsif (!$interactive) {
-			if (!--$dmcount) {
-				&dmrefresh($interactive); # using dm_first_time
-				$dmcount = $dmpause;
+			if (!--$pmcount) {
+				&pmrefresh($interactive); # using pm_first_time
+				$pmcount = $pmpause;
 			}
 		}
 	}
 DONT_REFRESH:
 	# nrvs is tricky with synchronicity
-	if (!$synch || ($synch && $synchronous_mode && !$dm_first_time)) {
+	if (!$synch || ($synch && $synchronous_mode && !$pm_first_time)) {
 		$k = length($notify_rate) + length($vs) + length($credlog);
 		if ($k) {
 			&std($notify_rate);
@@ -3878,7 +4036,7 @@ EOF
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^pipet (..)/) {
 			my $key = &get_post($1);
-			my $ms = $key->{'menu_select'} || 'XX';
+			my $ms = $key->{'_texapp_menu_select'} || 'XX';
 			my $ds = $key->{'created_at'} || 'argh, no created_at';
 			$ds =~ s/\s/_/g;
 			my $src = $key->{'source'}->{'name'} || 'unknown';
@@ -3889,8 +4047,8 @@ EOF
 		($key->{'_texapp_has_entity_links'})." ".
 		($key->{'_texapp_latitude'})." ".
 		($key->{'_texapp_longitude'})." ".
-		$key->{'tag'}->{'type'}. " ". # NO SPACES!
-		unpack("${pack_magic}H*", $key->{'tag'}->{'payload'}). " ".
+		$key->{'_texapp_tag'}->{'type'}. " ". # NO SPACES!
+		unpack("${pack_magic}H*", $key->{'_texapp_tag'}->{'payload'}). " ".
 		($key->{'num_replies'} || "0"). " " .
 		($key->{'num_stars'} || "0") . " " .
 		($key->{'thread_id'} || "0") . " " .
@@ -3903,13 +4061,30 @@ EOF
 			print P $key;
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^piped (..)/) {
-			my $key = $dm_store_hash{$1};
-			my $ms = $key->{'menu_select'} || 'XX';
-			my $ds = $key->{'created_at'} || 'argh, no created_at';
-			$ds =~ s/\s/_/g;
-			$key = substr(( "$ms ".($key->{'id'})." ".
-		$key->{'sender'}->{'username'}." $ds ".
-			unpack("${pack_magic}H*", $key->{'text'}).
+			# THIS IS THE CONTEXT, NOT THE PM!!!
+			my $key = $pm_context_hash{$1};
+			$key = substr(( $key->{'id'}." ".
+				$key->{'owner'}. " ".
+				join('_',@{ $key->{'users'} }).
+			$space_pad), 0, 1024);
+			print P $key;
+			goto RESTART_SELECT;
+		} elsif ($rout =~ /^pipep (..)/) {
+			# THIS IS THE PM, NOT THE CONTEXT!!!
+			my $key = $pm_store_hash{$1};
+			my $ms = $key->{'_texapp_menu_select'} || "XX";
+			my $source = $key->{'source'}->{'name'} || "unknown";
+			$source =~ s/\s/\|/g; # for consistency
+			$key = substr(( $ms." ".
+				$key->{'id'}." ".
+				$key->{'channel_id'}." ".
+				($key->{'_texapp_has_entity_links'}) . " ".
+				($key->{'_texapp_latitude'})." ".
+				($key->{'_texapp_longitude'})." ".
+				lc($key->{'user'}->{'username'})." ".
+				$key->{'created_at'}." ".
+				$source." ".
+				unpack("${pack_magic}H*", $key->{'text'}).
 			$space_pad), 0, 1024);
 			print P $key;
 			goto RESTART_SELECT;
@@ -4021,20 +4196,10 @@ EOF
 			$interactive = 1;
 			($fetchwanted = 0+$1, $fetch_id = 0, $last_id = 0)
 				if ($rout =~ /^reset(\d+)/);
-			($dmfetchwanted = 0+$1, $last_dm = 0)
-				if ($rout =~ /^dmreset(\d+)/);
-			if ($rout =~ /^smreset/) { # /dmsent
-				$dmfetchwanted = 0+$1
-					if ($rout =~ /(\d+)/);
-				&dmrefresh(1, 1);
+			if ($rout =~ /^pm/) {
+				&pmrefresh($interactive);
 				&send_repaint if ($termrl);
-				# we do not want to force a refresh.
-				goto DONT_REFRESH;
-			}
-			if ($rout =~ /^dm/) {
-				&dmrefresh($interactive);
-				&send_repaint if ($termrl);
-				$dmcount = $dmpause;
+				$pmcount = $pmpause;
 				goto DONT_REFRESH;
 			}
 		}
@@ -4045,7 +4210,7 @@ EOF
 			goto RESTART_SELECT;
 		}
 		print $stdout
-"-- routine refresh (effpause = $effpause, $dmcount to next dm) ",
+"-- routine refresh (effpause = $effpause, $pmcount to next pm) ",
 			scalar localtime, "\n" if ($verbose);
 	}
 }
@@ -4338,8 +4503,8 @@ sub streamevents {
 			my $payload = &normalizejson($w->{'payload'});
 			my $sid = $payload->{'id'};
 
-			$payload->{'tag'}->{'type'} = 'timeline';
-			$payload->{'tag'}->{'payload'} = 'stream';
+			$payload->{'_texapp_tag'}->{'type'} = 'timeline';
+			$payload->{'_texapp_tag'}->{'payload'} = 'stream';
 
 			# filter replies from streaming socket if the
 			# user requested it. use $posttype to determine
@@ -4367,11 +4532,13 @@ sub streamevents {
 			$last_id = $sid unless (!$last_id);
 		}
 
-		# dispatch DMs
+		# dispatch PMs
 		elsif (($tmp = $w->{'payload'}->{'direct_message'}) &&
-				$dmpause) {
-			&dmrefresh(0, 0, [ $tmp ]);
-			# don't roll last_dm yet.
+				$pmpause) {
+#TODO
+# this needs to pass a context and channel to pmrefresh somehow
+			&pmrefresh(0, [ $tmp ]);
+			# don't roll last_pm yet.
 		}
 
 		# must be an event. see if standardevent can make sense of it.
@@ -4397,10 +4564,14 @@ sub outstack {
 	&sendnotifies($post_ref, $class);
 	return $rv;
 }
-sub dmoutstack {
-	my $dm_ref = shift;
-	my $rv = &$dmhandle($dm_ref);
-	&senddmnotifies($dm_ref) if ($sns ne $whoami);
+sub pmoutstack {
+	my $pm_ref = shift;
+	my $pm_context = shift;
+
+	my $sns = lc($pm_ref->{'user'}->{'username'});
+	my $rv = &$pmhandle($pm_ref, $pm_context);
+	&sendpmnotifies($pm_ref, $pm_context) if ($sns ne $whoami
+		&& $is_background); # don't do this in the foreground!
 	return $rv;
 }
 sub evoutstack { # future expansion
@@ -4680,6 +4851,7 @@ sub sflush {
 	&send_removereadline if ($termrl);
 	map { $aa = $_->[0]; print $aa "$_->[1]" } @stream_buf;
 	@stream_buf = ();
+	$wrapseq = 1;
 	&send_repaint if ($termrl);
 }
 
@@ -4722,6 +4894,7 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 			# we discover them to the user_cache.
 			unless ($is_background) {
 				$user_cache{$sn} = $j->{'user'}->{'id'};
+				$user_id_cache{$user_cache{$sn}} = $sn;
 			}
 
 			#
@@ -4815,7 +4988,7 @@ sub assign_key {
 		($post_counter == 259) ? $mini_split :
 		($post_counter == ($mini_split - 1))
 				? 0 : ($post_counter+1);
-	$post_ref->{'menu_select'} = $key;
+	$post_ref->{'_texapp_menu_select'} = $key;
 	$key = lc($key);
 
 	# recover ID cache memory: find the old ID with this
@@ -4827,6 +5000,32 @@ sub assign_key {
 		$id_cache{$id} = $key;
 	}
 	$store_hash{$key} = $post_ref;
+	return $key;
+}
+sub assign_pm_key {
+	my $pm_ref = shift;
+	my $pm_context = shift;
+
+	# given a PM and its context (derived from &pmchanneltocontext),
+	# assign a key and cache the context just as we did with assign_key.
+	my $key = (($is_background) ? '' : 'z').
+			substr($alphabet, $pm_counter/10, 1) .
+			$pm_counter % 10;
+	$pm_counter = 
+		($pm_counter == 259) ? $mini_split :
+		($pm_counter == ($mini_split - 1))
+				? 0 : ($pm_counter+1);
+	$pm_ref->{'_texapp_menu_select'} = 'p'.$key;
+	$key = lc($key);
+	$pm_store_hash{$key} = $pm_ref;
+
+	# recover context cache memory. we do this in both foreground and
+	# background since many functions are moved into the foreground in
+	# Texapp.
+	delete $pm_context_cache{$pm_context_hash{$key}->{'id'}};
+	$pm_context_cache{$pm_context->{'id'}} = $key;
+
+	$pm_context_hash{$key} = $pm_context;
 	return $key;
 }
 
@@ -4849,98 +5048,180 @@ $my_json_ref->[(&min($print_max,scalar(@{ $my_json_ref }))-1)]->{'created_at'});
 	}
 }
 
-# thump for DMs
-sub dmrefresh {
-	my $interactive = shift;
-	my $sent_dm = shift;
-	# for streaming API to inject DMs it receives
-	my $my_json_ref = shift;
+sub pmscan {
+	my $top = shift;
+	my $k;
+	my $max;
+	my @outarray;
 
 	if ($anonymous) {
 		print $stdout
-			"-- sorry, you can't read DMs if you're anonymous.\n"
+			"-- sorry, you can't read PMs if you're anonymous.\n"
+			if ($interactive);
+		return;
+	}
+	# do not fetch deleted posts here.
+	my $ref = &grabjadn(
+"${chanurl}?channel_types=net.app.core.pm&include_deleted=0&include_recent_message=1&count=200");
+	return if (ref($ref) ne 'ARRAY' || !scalar(@{ $ref }));
+
+	&std(($top) ?
+	"-- most recent $top messages on all channels (/pmscan for all channels)\n"
+	: "-- all channels (/pmagain on a PM to view thread)\n");
+
+	@outarray = ($top) ?
+		sort { $b->{'recent_message'}->{'id'}
+			<=> $a->{'recent_message'}->{'id'} } @{ $ref }
+		:
+		sort { $a->{'id'} <=> $b->{'id'} } @{ $ref }
+	;
+		
+	foreach $k (@outarray) {
+		my $j = $k->{'recent_message'};
+		my $l = &pmchanneltocontext($k);
+
+		&assign_pm_key($j, $l);
+		&pmoutstack($j, $l);
+		$max = &max($max, $j->{'id'});
+		last unless (--$top);
+	}
+	$last_pm = &max($max, $last_pm);
+	return;
+}
+
+# thump for PMs
+sub pmrefresh {
+	my $interactive = shift;
+	# for streaming API to inject PMs it receives
+	# XXXX: we need to have this figure out how to pass it a context
+	my $my_json_ref = shift;
+
+	my %context_cache;
+	my $m;
+	my $max;
+
+	if ($anonymous) {
+		print $stdout
+			"-- sorry, you can't read PMs if you're anonymous.\n"
 			if ($interactive);
 		return;
 	}
 
 	# no point in doing this if we can't even get to our own timeline
 	# (unless user specifically requested it, or our timeline is off)
-	return if (!$interactive && !$last_id && !$notimeline); # NOT last_dm
+	return if (!$interactive && !$last_id && !$notimeline); # NOT last_pm
 
-	$my_json_ref = &grabjadn((($sent_dm) ? $dmsenturl : $dmurl),
-		(($sent_dm) ? 0 : $last_dm), 0, $dmfetchwanted, undef, 1)
-			if (!defined($my_json_ref) ||
-				ref($my_json_ref) ne 'ARRAY');
-	return if (!defined($my_json_ref)
-		|| ref($my_json_ref) ne 'ARRAY');
+	# do a brief /pmscan for first time start up
+	return &pmscan(2) if (!$last_pm);
 
-	my $orig_last_dm = $last_dm;
-	$last_dm = 0 if ($sent_dm);
+	unless ($my_json_ref) {
+		my @messages = ();
+		my $c;
 
-	$dmfetchwanted = 0;
-	my $printed = 0;
-	my $max = 0;
-	my $disp_max = &min($print_max, scalar(@{ $my_json_ref }));
-	my $i;
-	my $g;
-	my $key;
+		# get all channels with their most recent messages
+		my $ref = &grabjadn(
+"${chanurl}?channel_types=net.app.core.pm&include_recent_message=1&count=200");
+		return if (ref($ref) ne 'ARRAY' || !scalar(@{ $ref }));
 
-	if ($disp_max) { # an empty list can be valid
-		if ($dm_first_time) {
-			&std(
-			"-- checking for most recent direct messages:\n");
-			$disp_max = 2;
-			$interactive = 1;
+		# go through the channels. if the most recent message in each
+		# is greater than last_pm, fetch all messages and add all
+		# messages to the arrayref that are more recent than last_pm
+		# (use since_id and a count of 200 for maximum goodness).
+		foreach $c (@{ $ref }) {
+			my $cid = $c->{'id'};
+			my $cmid = $c->{'recent_message'}->{'id'};
+			print $stdout
+"-- background pmscan: channel = $cid mrm_id = $cmid\n" if ($verbose);
+
+			next unless ($cmid > $last_pm);
+
+			my $ms_ref = &grabjadn(&urlp($chanmsbyidurl,,$cid),
+				$last_pm, 0, 200);
+			next if (ref($ms_ref) ne 'ARRAY' ||
+				!scalar(@{ $ms_ref })); # hmmm ....
+
+			$context_cache{$cid} = &pmchanneltocontext($c);
+			print $stdout
+"-- fetched @{[ scalar(@{ $ms_ref }) ]} new messages for channel $cid\n"
+				if ($verbose);
+			
+			push(@messages, @{ $ms_ref });
 		}
-		for($i = $disp_max; $i > 0; $i--) {
-			$g = ($i-1);
-			my $j = $my_json_ref->[$g];
-			next if (!$sent_dm && $j->{'id'} <= $last_dm);
-			next if (!length($j->{'sender'}->{'username'}) ||
-				!length($j->{'recipient'}->{'username'}));
-
-			$key = substr($alphabet, $dm_counter/10, 1) .
-				$dm_counter % 10;
-			$dm_counter = 
-				($dm_counter == 259) ? 0 :
-				($dm_counter+1);
-			$j->{'menu_select'} = $key;
-			$dm_store_hash{lc($key)} = $j;
-
-			$wrapseq++;
-			$printed += scalar(&$dmoutstack($j));
+		if (!scalar(@messages)) {
+			if ($interactive) {
+				&std("-- sorry, no new PMs found.\n");
+				$wrapseq = 1;
+			}
+			return;
+		} else {
+			$my_json_ref = \@messages;
 		}
-		$max = $my_json_ref->[0]->{'id'};
+	} else {
+		# populate the context cache from the provided hashref
+		# XXXX!
 	}
-	if (($interactive || $verbose) && !$printed && !$dm_first_time) {
-		&send_removereadline if ($termrl);
-		print $stdout (($sent_dm)
-			? "-- you haven't sent anything yet.\n"
-			: "-- sorry, no new direct messages.\n");
-		$wrapseq = 1;
-		&send_repaint if ($termrl);
+	return if (!defined($my_json_ref) || ref($my_json_ref) ne 'ARRAY');
+
+	# now, display PMs
+	foreach $m (sort { $a->{'id'} <=> $b->{'id'} } @{ $my_json_ref }) {
+		my $context = $context_cache{$m->{'channel_id'}};
+		print $stdout
+"** problem: could not find a context for PMID $m->{'id'}; skipping\n"
+			if (!defined($context));
+		&assign_pm_key($m, $context);
+		&pmoutstack($m, $context);
+		$max = $m->{'id'};
 	}
-	$last_dm = ($sent_dm) ? $orig_last_dm 
-		: &max($last_dm, $max);
-	$dm_first_time = 0 if ($last_dm || !scalar(@{ $my_json_ref }));
-	print $stdout "-- dm bookmark is $last_dm.\n" if ($verbose);
-	&$dmconclude;
+	$last_pm = &max($last_pm, $max);
+	$pm_first_time = 0 if ($last_pm || !scalar(@{ $my_json_ref }));
+	print $stdout "-- pm bookmark is $last_pm.\n" if ($verbose);
+	&$pmconclude;
+	$wrapseq = 1;
 }	
 
 # post an update
-# this is a general API function that handles status updates and sending DMs.
+# this is a general API function that handles status updates and sending PMs.
 sub updatest {
 	my $string = shift;
 	my $interactive = shift;
 	my $in_reply_to = shift;
-	my $user_name_dm = shift;
+	my $pm_object = shift;
 	my $rp_id = shift; # even if this is set, string should also be set.
 	my $urle = '';
 	my $i;
 	my $subpid;
 	my $istring;
+	my $user_name_pm;
+	my $json_user_pm;
+	my $cid;
+	my @method = @wend;
 
-	my $verb = (length($user_name_dm)) ? "DM $user_name_dm" :
+	# pm_object can either be a string (the username) or a context ref.
+	# if it's a string, that becomes user_name_pm, and the channel ID
+	# becomes "pm" (developers.app.net/docs/resources/message/lifecycle/).
+	# if it's a context, then the user_name_pm list is taken from there
+	# and the channel ID as well.
+
+	if(ref($pm_object) eq 'HASH') {
+		# it's a context
+		$user_name_pm = join(' ',
+			&users_not_me(@{ $pm_object->{'users'} }));
+		$json_user_pm = join('", "@',
+			&users_not_me(@{ $pm_object->{'users'} }));
+		$cid = $pm_object->{'id'};
+	} elsif(ref($pm_object) eq 'ARRAY') {
+		# it's a list of names
+		$user_name_pm = join(' ', @{ $pm_object });
+		$json_user_pm = join('", "@',
+			&users_not_me(@{ $pm_object }));
+		$cid = 'pm';
+	} else {
+		# it's a user name
+		$user_name_pm = $json_user_pm = $pm_object;
+		$cid = 'pm';
+	}
+
+	my $verb = (length($user_name_pm)) ? "PM $user_name_pm" :
 			($rp_id) ? 'RE-post' :
 			'post';
 
@@ -4962,10 +5243,8 @@ sub updatest {
 		$postbreak_time = time();
 	}
 
-#TODO
-# DM???
 	my $payload = 'text';
-	$string = &$prepost($string) unless ($user_name_dm || $rp_id);
+	$string = &$prepost($string) unless ($user_name_pm || $rp_id);
 
 	# YES, you *can* verify and slowpost. I thought about this and I
 	# think I want to allow it.
@@ -4995,9 +5274,6 @@ sub updatest {
 		}
 	}
 
-	$user_name_dm = (length($user_name_dm)) ?
-		"&user=$user_name_dm" : '';
-
 	my $i = '';
 	$i .= "reply_to=${in_reply_to}&" if ($in_reply_to > 0);
 	if (!$rp_id && defined $lat && defined $long && $location) {
@@ -5007,8 +5283,24 @@ sub updatest {
 		print $stdout
 		"-- warning: incomplete location ($lat, $long) ignored\n";
 	}
-	$i .= "${payload}=${urle}${user_name_dm}" unless ($rp_id);
+	$i .= "${payload}=${urle}" unless ($rp_id);
 	$i .= "id=$rp_id" if ($rp_id);
+
+	if ($user_name_pm) {
+		@method = @wjnd;
+		my $ustring = &escape_qq($string);
+		if ($cid eq 'pm') {
+			# this is already in the right format.
+			chomp($i = <<"EOF");
+{ "text" : "$ustring", "destinations" : ["\@${json_user_pm}"]}
+EOF
+		} else {
+			chomp($i = <<"EOF");
+{ "text" : "$ustring" }
+EOF
+		}
+	}
+
 	$slowpost += 0; if ($slowpost && !$script && !$status && !$silent) {
 		if($pid = open(SLOWPOST, '-|')) {
 			# pause background so that it doesn't kill itself
@@ -5033,9 +5325,9 @@ sub updatest {
 		}
 	}
 	my $return = &backticks($baseagent, '/dev/null', undef,
-		(length($user_name_dm)) ? $dmupdate :
-		($rp_id) ? &urlp($rpurl, $whoamid, $rp_id) :
-		$update, $i, 0, @wend);
+		(length($user_name_pm)) ? &urlp($chanmsbyidurl,,$cid) :
+		($rp_id) ? &urlp($rpurl, $whoamid, $rp_id) : $update,
+	$i, 0, @method);
 	print $stdout "-- return --\n$return\n-- return --\n"
 		if ($superverbose);
 	if ($? > 0) {
@@ -5065,7 +5357,7 @@ EOF
 		return 98;
 	}
 	$lastpostid = &parsejson($return)->{'id'};
-	unless ($user_name_dm || $rp_id) {
+	unless ($user_name_pm || $rp_id) {
 		$lasttwit = $string;
 		&$postpost($string);
 	}
@@ -5078,7 +5370,7 @@ EOF
 	return 0;
 }
 
-# this dispatch routine replaces the common logic of deletest, deletedm,
+# this dispatch routine replaces the common logic of deletest, deletepm,
 # follow, leave and the favourites system.
 # this is a modified, abridged version of &updatest.
 sub central_cd_dispatch {
@@ -5123,18 +5415,45 @@ sub deletest {
 	return 0;
 }
 
-# delete a DM
-#TODO
-sub deletedm {
+# delete a PM (needs id *and* channel id)
+sub deletepm {
 	my $id = shift;
+	my $cid = shift;
 	my $interactive = shift;
 
-	my $update = "${dmdelurl}/${id}.json";
-	my ($en, $em) = &central_cd_dispatch("id=$id", $interactive, $update);
-	print $stdout "-- DM id #${id} has been removed\n"
+	my $update = &urlp($msbycidurl, $cid, $id);
+	my ($en, $em) = &central_cd_dispatch("", $interactive, $update,
+		@wdnd);
+	print $stdout "-- PM id #${id} has been removed\n"
 		if ($interactive && !$en);
-	print $stdout "*** (was the DM already deleted?)\n"
+	print $stdout "*** (was the PM already deleted?)\n"
 		if ($interactive && $en);
+	return 0;
+}
+
+# subscribe or unsubscribe to a channel ID (only the latter is implemented)
+sub uorschannel {
+	my $cid = shift;
+	my $interactive = shift;
+	my $mode = shift; # XXXX ignored
+
+	my $update = &urlp($chansubbyidurl,,$cid);
+#TODO
+# implement subscriptions
+	my @method = @wdnd;
+	my ($en, $em) = &central_cd_dispatch("", $interactive, $update,
+		@method);
+	if ($interactive) {
+		if (!$en) {
+			print $stdout
+				"-- PM channel closed for channel ID #$cid\n";
+			print $stdout "-- it will not appear in /pmscan\n";
+			print $stdout
+			"-- it may be automatically reopened by activity\n";
+		} else {
+			print $stdout "*** already closed?\n";
+		}
+	}
 	return 0;
 }
 
@@ -5254,12 +5573,19 @@ sub standardpost {
 		$threads_match{$ref->{'thread_id'}});
 
 	# prepend list information, if this post originated from a list
-	$sn = "($ref->{'tag'}->{'payload'})$sn"	
-		if (length($ref->{'tag'}->{'payload'}) &&
-			$ref->{'tag'}->{'type'} eq 'list');
+	$sn = "($ref->{'_texapp_tag'}->{'payload'})$sn"	
+		if (length($ref->{'_texapp_tag'}->{'payload'}) &&
+			$ref->{'_texapp_tag'}->{'type'} eq 'list');
 
-	$post = "<$sn> $post" if (length($post));
-	$post = "[<$sn> deleted this post]" if (!length($post));
+	if (length($post)) {
+		if ($post =~ s#^/me ##) {
+			$post = "[<$sn> $post]";
+		} else {
+			$post = "<$sn> $post";
+		}
+	} else {
+		$post = "{<$sn> deleted this post}";
+	}
 
 	# append star count
 	$h = $ref->{'repost_of'}->{'num_stars'} || $ref->{'num_stars'};
@@ -5309,25 +5635,74 @@ s/(^|[^a-zA-Z0-9_])\@([a-zA-Z0-9_\/]+)/\1\@${UNDER}\2${colour}/g;
 	return $post;
 }
 
-# format a DM based on standard user options
-sub standarddm {
-	my $ref = shift;
-	my $nocolour = shift;
+# do precalculations on a PM channel to get a distilled context
+# this is done by pmscan and pmrefresh so that the caches are ready to go
+sub pmchanneltocontext {
+	my $context = shift;
+	my %new_context;
+	my %uids;
+	my @unames;
+	my @unames2;
 
+#TODO
+	# if the channel has a mutable ACL, we're going to have problems
+	# when we cache this since the user permission lists could change,
+	# so warn the user. net.app.core.pm channels should ALWAYS be
+	# immutable, per @berg, and that's all we support.
+	&sto("** warning: channel found with mutable ACL\n".
+	     "** this might affect your ability to read or write messages\n")
+		if ($context->{'readers'}->{'immutable'} eq 'false' ||
+		    $context->{'writers'}->{'immutable'} eq 'false');
+
+	# take the union of reader and writer UIDs from the context channel
+	map { $uids{$_}++ } (@{ $context->{'readers'}->{'user_ids'} });
+	map { $uids{$_}++ } (@{ $context->{'writers'}->{'user_ids'} });
+	$uids{$context->{'owner'}->{'id'}}++;
+	$uids{$whoamid}++ if ($context->{'readers'}->{'you'} eq 'true' ||
+		$context->{'writers'}->{'you'} eq 'true');
+
+	# assign owner and usernames
+	$new_context{'owner'} = $context->{'owner'}->{'username'};
+	@unames = map { &get_user_by_id($_) } (keys %uids);
+	$new_context{'users'} = \@unames;
+
+	$new_context{'id'} = $context->{'id'};
+
+	return \%new_context;
+}
+sub users_not_me {
+	# take a list of usernames, remove mine from it
+	return grep { lc($_) ne $whoami } (@_);
+}
+
+# format a PM based on standard user options
+sub standardpm {
+	my $ref = shift;
+	my $context = shift;
+	my $nocolour = shift;
+	my %uids;
 	my ($time, $ts) = &$wraptime($ref->{'created_at'});
 	my $text = &descape($ref->{'text'});
-	my $sns = &descape($ref->{'sender'}->{'username'});
-	if ($sns eq $whoami) {
-		$sns = "->" . &descape($ref->{'recipient'}->{'username'});
-	}
-	my $g = &wwrap("[DM d$ref->{'menu_select'}]".
+	my $wasdel = (length($text)) ? "" : " was deleted";
+	my $sns = &descape($ref->{'user'}->{'username'});
+	$sns .= "->" . join(' ', grep { lc($sns) ne $_ }
+		@{ $context->{'users'} });
+	$sns = "+$sns" if (length($ref->{'_texapp_latitude'}) &&
+		length($ref->{'_texapp_longitude'}));
+	$sns = "&$sns" if ($ref->{'_texapp_has_entity_links'});
+	$sns = "*$sns" if ($ref->{'source'}->{'name'} =~ /Texapp/ &&
+		$texappistas);
+
+	# remove the sender from the list of users since they always get it
+
+	my $g = &wwrap("[PM $ref->{'_texapp_menu_select'}${wasdel}]".
 		"[$sns/$ts] $text", ($wrapseq <= 1) ? ((&$prompt(1))[1]) : 0);
 
-	$g =~ s/^\[DM ([^\/]+)\//${CCdm}[DM ${EM}\1${OFF}${CCdm}\//
+	$g =~ s/^\[PM ([^\/]+)\//${CCpm}[PM ${EM}\1${OFF}${CCpm}\//
 		unless ($nocolour);
 	$g =~ s/\n*$//;
 	$g .= ($nocolour) ? "\n" : "$OFF\n";
-	$g =~ s/(^|[^a-zA-Z0-9_])\@(\w+)/\1\@${UNDER}\2${OFF}${CCdm}/g
+	$g =~ s/(^|[^a-zA-Z0-9_])\@(\w+)/\1\@${UNDER}\2${OFF}${CCpm}/g
 		unless ($nocolour);
 	return $g;
 }
@@ -5498,18 +5873,18 @@ sub multiaddaction {
 sub multiconclude {
 	&multi_module_dispatch(\&defaultconclude, \@m_conclude, 0, @_);
 }
-sub multidmconclude {
-	&multi_module_dispatch(\&defaultdmconclude, \@m_dmconclude, 0, @_);
+sub multipmconclude {
+	&multi_module_dispatch(\&defaultpmconclude, \@m_pmconclude, 0, @_);
 }
-sub multidmhandle {
-	&multi_module_dispatch(\&defaultdmhandle, \@m_dmhandle, sub {
+sub multipmhandle {
+	&multi_module_dispatch(\&defaultpmhandle, \@m_pmhandle, sub {
 		my $rv = shift;
 
 		# skip default calls.
 		return 0 if ($this_call_default);
 
-		# if not a default call, and the DM was refused for
-		# processing by this extension, then the DM is now
+		# if not a default call, and the PM was refused for
+		# processing by this extension, then the PM is now
 		# suppressed. do not call any other extensions after this.
 		# even if it ends in suppression, we still call the default
 		# if it was ever called before.
@@ -5543,7 +5918,7 @@ sub multiexception {
 		&multi_module_dispatch(\&defaultexception, \@m_exception, sub {
 			my $rv = shift;
 
-			# same logic as handle/dmhandle, except return -1-
+			# same logic as handle/pmhandle, except return -1-
 			# to mask from subsequent extensions.
 			return 0 if ($this_call_default);
 			return 5 if ($rv);
@@ -5658,7 +6033,7 @@ sub defaulthandle {
 	my $sn = &descape($post_ref->{'user'}->{'username'});
 	my $post = &descape($post_ref->{'text'});
 	my $spost = &standardpost($post_ref);
-	my $menu_select = $post_ref->{'menu_select'};
+	my $menu_select = $post_ref->{'_texapp_menu_select'};
 	
 	$menu_select = (length($menu_select) && !$script)
 		? (($menu_select =~ /^z/) ?
@@ -5687,8 +6062,9 @@ sub userline { # used by both $userhandle and /whois
 
 	# add to the user cache in foreground as these are discovered
 	unless ($is_background) {
-		$user_cache{lc(&descape($my_json_ref->{'username'}))}
-			 = $my_json_ref->{'user'}->{'id'};
+		my $k = lc(&descape($my_json_ref->{'username'}));
+		$user_cache{$k} = $my_json_ref->{'user'}->{'id'};
+		$user_id_cache{$user_cache{$k}} = $k;
 	}
 
 	my $muted =
@@ -5735,10 +6111,10 @@ sub defaultposttype {
 	#	# if this is a search result, colour cyan
 	#	return 'search';
 	#}
-	#if ($ref->{'tag'}->{'type'} eq 'list') { # anonymous allows this too
+	#if ($ref->{'_texapp_tag'}->{'type'} eq 'list') { # anonymous allows this too
 	#	return 'list';
 	#}
-	#return 'default' if ($ref->{'tag'}->{'type'} ne 'timeline');
+	#return 'default' if ($ref->{'_texapp_tag'}->{'type'} ne 'timeline');
 	return 'follow' if ($ref->{'user'}->{'you_follow'} eq 'true');
 	return 'alien';
 }
@@ -5751,19 +6127,21 @@ sub defaultconclude {
 	}
 }
 
-sub defaultdmhandle {
+sub defaultpmhandle {
 	(&flag_default_call, return) if ($multi_module_context);
-	my $dm_ref = shift;
+	my $pm_ref = shift;
+	my $pm_context = shift;
 	my $sns = &descape($dm_ref->{'sender'}->{'username'});
 
-	&sto(&standarddm($dm_ref));
+	&sto(&standardpm($pm_ref, $pm_context));
 	return 1;
 }
 
-sub senddmnotifies {
-	my $dm_ref = shift;
-	&notifytype_dispatch('DM', &standarddm($dm_ref, 1), $dm_ref)
-		if ($notify_list{'dm'} && $last_dm);
+sub sendpmnotifies {
+	my $pm_ref = shift;
+	my $pm_context = shift;
+	&notifytype_dispatch('PM', &standardpm($pm_ref, $pm_context, 1),
+		[ $pm_ref, $pm_context ]) if ($notify_list{'pm'} && $last_pm);
 }
 
 sub defaulteventhandle {
@@ -5776,7 +6154,7 @@ sub defaulteventhandle {
 	return 1;
 }
 
-sub defaultdmconclude {
+sub defaultpmconclude {
 	(&flag_default_call, return) if ($multi_module_context);
 }
 
@@ -5797,7 +6175,7 @@ sub defaultpostpost {
 	while($line =~ s/^\@(\w+)\s+//) {
 		$readline_completion{'@'.lc($1)}++;
 	}
-	if ($line =~ /^[dD]\s+(\w+)\s+/) {
+	if ($line =~ /^[pP]\s+(\w+)\s+/) {
 		$readline_completion{'@'.lc($1)}++;
 	}
 }
@@ -5811,13 +6189,13 @@ sub defaultautocompletion {
 	# handle / completion
 	if ($start == 0 && $text =~ m#^/#) {
 		return sort grep(/^$qmtext/i, '/history',
-			'/print', '/quit', '/bye', '/again',
-			'/wagain', '/whois', '/thump', '/dm',
-			'/refresh', '/dmagain', '/set', '/help',
+			'/print', '/quit', '/bye', '/again', '/pmagain',
+			'/wagain', '/whois', '/thump', '/pm', '/pmscan',
+			'/refresh', '/dmagain', '/set', '/help', '/pmclose',
 			'/reply', '/url', '/thread', '/repost', '/replyall',
 			'/replies', '/ruler', '/exit', '/me', '/vcheck',
 			'/orepost', '/erepost', '/frepost', '/liston',
-			'/listoff', '/dmsent', '/starsof',
+			'/listoff', '/starsof', '/replyg', '/replyh',
 			'/lists', '/withlist', '/add', '/padd', '/push',
 			'/pop', '/followers', '/friends', '/lfollow',
 			'/lleave', '/listfollowers', '/listfriends',
@@ -5959,7 +6337,20 @@ sub get_user {
 #TODO
 # try to cache failure, but not transient failure
 	return undef if (!defined($json_ref->{'id'}));
+	$user_id_cache{$json_ref->{'id'}} = $user;
 	return ($user_cache{$user} = $json_ref->{'id'});
+}
+
+sub get_user_by_id {
+	my $uid = lc(shift);
+	return $whoami if ($user eq $whoamid);
+	return $user_id_cache{$uid} if ($user_id_cache{$uid});
+	my $json_ref = &grabjadn("${uidurl}${uid}", 0, 0, 0, undef, 1);
+#TODO
+# try to cache failure, but not transient failure
+	return undef if (!defined($json_ref->{'username'}));
+	$user_cache{$json_ref->{'username'}} = $uid;
+	return ($user_id_cache{$uid} = $json_ref->{'username'});
 }
 
 #### IPC routines for communicating between the foreground + background ####
@@ -5973,10 +6364,9 @@ sub get_post {
 #TODO
 # implement querying the id_cache here. we need IPC for it, though.
 	# if the code is all numbers, treat it like an id, and try
-	# to get it from the server. we have similar code in get_dm.
-	# the first post that is of relevance is ID 20. try /dump 20 :)
+	# to get it from the server. we have similar code in get_pm.
 	return &grabjadn(&urlp($idurl,,$code), 0, 0, 0, undef, 1)
-		if ($code =~ /^[0-9]+$/ && (0+$code > 19));
+		if ($code =~ /^[0-9]+$/);
 
 	return undef if ($code !~ /^z?[a-z][0-9]$/);
 	my $source = ($code =~ /^z/) ? 1 : 0;
@@ -6002,13 +6392,13 @@ sub get_post {
 	return undef if ($k !~ /[^\s]/);
 	$k =~ s/\s+$//; # remove trailing spaces
 	print $stdout "-- background store fetch: $k\n" if ($verbose);
-	($w->{'menu_select'}, $w->{'id'}, $w->{'reply_to'},
+	($w->{'_texapp_menu_select'}, $w->{'id'}, $w->{'reply_to'},
 		$w->{'repost_of'}->{'id'},
 		$w->{'_texapp_has_entity_links'},
 		$w->{'_texapp_latitude'},
 		$w->{'_texapp_longitude'},
-		$w->{'tag'}->{'type'},
-		$w->{'tag'}->{'payload'},
+		$w->{'_texapp_tag'}->{'type'},
+		$w->{'_texapp_tag'}->{'payload'},
 		$w->{'num_replies'},
 		$w->{'num_stars'},
 		$w->{'thread_id'},
@@ -6017,7 +6407,7 @@ sub get_post {
 			$l) = split(/\s/, $k, 16);
 	($w->{'source'}->{'name'}, $k) = split(/\|/, $l, 2);
 	$w->{'text'} = pack("H*", $k);
-	$w->{'tag'}->{'payload'} = pack("H*", $w->{'tag'}->{'payload'});
+	$w->{'_texapp_tag'}->{'payload'} = pack("H*", $w->{'_texapp_tag'}->{'payload'});
 	return undef if (!length($w->{'text'})); # unpossible
 	$w->{'created_at'} =~ s/_/ /g;
 	print $stdout "-- successfully retrieved from background\n"
@@ -6036,25 +6426,26 @@ sub get_original_post {
 	return $ref;
 }
 
-# this is the analogous function for a rolling DM code. it is somewhat
-# simpler as DM codes are always rolling and have no foreground store
-# currently, so it always executes a background request.
-sub get_dm {
+# this gets the *context* of a PM (i.e., the distilled internal representation
+# of a channel). the context could be in the foreground or the background.
+sub get_pm_context {
 	my $code = lc(shift);
 	my $k = '';
 	my $l = '';
-	my $w = {'sender' => {}};
-	return undef if (length($code) < 3 || $code !~ s/^d//);
+	my $m = '';
+	my $w = { };
+	my @u;
+	return undef if (length($code) < 3 || $code !~ s/^p//);
 
-	# this is the aforementioned "similar code" (see get_post).
-	# optimization: I doubt ANY of us can get DMIDs less than 9.
-	return &grabjadn("${dmidurl}/${code}.json", 0, 0, 0, undef, 1)
-		if ($code =~ /^[0-9]+$/ && (0+$code > 9));
+	if ($code =~ /^z/) {
+		return undef if ($is_background);
+		return $pm_context_hash{$code};
+	}
+	return $pm_context_hash{$code} if ($is_background);
 
-	return undef if ($code !~ /^[a-z][0-9]$/);
-
-	kill $SIGUSR2, $child if ($child); # prime pipe
-	print C "piped $code ----------\n"; # internally two alphanum, recall
+	print $stdout "-- querying background: $code\n" if ($verbose);
+	kill $SIGUSR2, $child if ($child);
+	print C "piped $code ----------\n";
 	while(length($k) < 1024) {
 		sysread(W, $l, 1024);
 		$k .= $l;
@@ -6062,12 +6453,62 @@ sub get_dm {
 	return undef if ($k !~ /[^\s]/);
 	$k =~ s/\s+$//; # remove trailing spaces
 	print $stdout "-- background store fetch: $k\n" if ($verbose);
-	($w->{'menu_select'}, $w->{'id'},
-		$w->{'sender'}->{'username'}, $w->{'created_at'},
-			$l) = split(/\s/, $k, 5);
+
+	($w->{'id'}, $w->{'owner'}, $m, $k) = split(/\s+/, $k, 4);
+	@u = split('_', $m);
+	$w->{'users'} = \@u;
+	return $w;
+}
+
+# this is the analogous function for a rolling PM code. note that this
+# is not much good without a channel context.
+sub get_pm {
+	my $code = lc(shift);
+	my $k = '';
+	my $l = '';
+	my $w = { };
+
+	return undef if ($code !~ s/^p//);
+
+	# this is the aforementioned "similar code" (see get_post).
+	if ($code =~ /^[0-9]+$/) {
+		# this end point gives us an array, even though we ask
+		# just for one.
+		my $ref = &grabjadn("${msbyidurl}?ids=$code",
+			0, 0, 0, undef, 1);
+		return undef if (ref($ref) ne 'ARRAY');
+		return $ref->[0];
+	}
+
+	return undef if (length($code) < 2);
+	if ($code =~ /^z/) {
+		return undef if ($is_background);
+		return $pm_store_hash{$code};
+	}
+	return $pm_store_hash{$code} if ($is_background);
+
+	print $stdout "-- querying background: $code\n" if ($verbose);
+	kill $SIGUSR2, $child if ($child); # prime pipe
+	print C "pipep $code ----------\n"; # internally two alphanum, recall
+	while(length($k) < 1024) {
+		sysread(W, $l, 1024);
+		$k .= $l;
+	}
+	return undef if ($k !~ /[^\s]/);
+	$k =~ s/\s+$//; # remove trailing spaces
+	print $stdout "-- background store fetch: $k\n" if ($verbose);
+
+	($w->{'_texapp_menu_select'}, $w->{'id'}, $w->{'channel_id'},
+			$w->{'_texapp_has_entity_links'},
+			$w->{'_texapp_latitude'},
+			$w->{'_texapp_longitude'},
+			$w->{'user'}->{'username'},
+			$w->{'created_at'},
+			$w->{'source'}->{'name'},
+			$l) = split(/\s/, $k, 10);
 	$w->{'text'} = pack("H*", $l);
 	return undef if (!length($w->{'text'})); # not possible
-	$w->{'created_at'} =~ s/_/ /g;
+	$w->{'source'}->{'name'} =~ s/\|/ /g;
 	return $w;
 }
 
@@ -6120,7 +6561,7 @@ sub sendbackgroundkey {
 }
 
 sub thump { print C "update-------------\n"; &sync_semaphore; }
-sub dmthump { print C "dmthump------------\n"; &sync_semaphore; }
+sub pmthump { print C "pmthump------------\n"; &sync_semaphore; }
 
 sub sync_n_quit {
 	if ($child) {
@@ -6754,7 +7195,7 @@ sub generate_ansi {
 	$OFF = ($ansi) ? "${ESC}[0m" : '';
 
 	foreach $k
-	(qw(prompt me dm reply warn search list default follow alien)) {
+	(qw(prompt me pm reply warn search list default follow alien)) {
 		${"colour$k"} = uc(${"colour$k"});
 		if (!defined($${"colour$k"})) {
 			print $stdout
@@ -6982,11 +7423,14 @@ sub grabjadn {
 		$get_annotations);
 
 	return ($my_json_ref) if ($undef);
+
+	# normalize posts and PMs
 	if ($my_json_ref->{'data'}) {
 		if (ref($my_json_ref->{'data'}) eq 'HASH' &&
 			$my_json_ref->{'data'}->{'source'}  &&
 			length($my_json_ref->{'data'}->{'id'}) &&
-			$my_json_ref->{'data'}->{'you_reposted'}) {
+			($my_json_ref->{'data'}->{'you_reposted'} ||
+				$my_json_ref->{'data'}->{'channel_id'})) {
 				$my_json_ref->{'data'} =
 				&normalizejson($my_json_ref->{'data'});
 		}
@@ -7014,16 +7458,10 @@ sub grabjadn {
 # - if there is no id, see if we can convert id into one. if
 #   there is loss of precision, warn the user. same for
 #   reply_to.
-# - if the source of this JSON data source is the Search API, translate
-#   its fields into the standard API.
 # - if the calling function has specified a tag, tag the posts, since
 #   we're iterating through them anyway. the tag should be a hashref payload.
-# - if the post is an newRT, unwrap it so that the full post text is
+# - if the post is a repost, unwrap it so that the full post text is
 #   revealed (unless -nonewrps).
-# - if this appears to be a post, put in a stub geo hash if one does
-#   not yet exist.
-# - if coordinates are flat string 'null', turn into a real null.
-# one day I would like this code to go the hell away.
 sub normalizejson {
 	my $i = shift;
 	my $kludge_search_api_adjust = shift;
@@ -7031,7 +7469,7 @@ sub normalizejson {
 	my $rt;
 
 	# tag the post
-	$i->{'tag'} = $tag if (defined($tag));
+	$i->{'_texapp_tag'} = $tag if (defined($tag));
 
 	# set entities flag for performance/marking
 	my $haz_entilinks = $i->{'entities'}->{'links'};
@@ -7578,9 +8016,9 @@ sub cosplit {
 	return ($k) if ($z <= $linelength); # also handles the trivial case
 
 	# this needs to be reply-aware, so we put @'s at the beginning of
-	# the second half too (and also Ds for DMs)
+	# the second half too (and also Ps for PMs)
 	$r .= $1 while ($k =~ s/^(\@[^\s]+\s)\s*// ||
-			$k =~ s/^(D\s+[^\s]+\s)\s*//);  # we have r/a, so while
+			$k =~ s/^(P\s+[^\s]+\s)\s*//);  # we have r/a, so while
 	$k = "$r$k";
 
 	my $i = $linelength;
@@ -7738,6 +8176,14 @@ print $stdout " FINAL HASH \n" if ($showwork);
 sub url_oauth_sub {
 	my $x = shift;
 	$x =~ s/([^-0-9a-zA-Z._~])/"%".uc(unpack("H*",$1))/eg; return $x;
+}
+
+# simple encoder for JSON (mostly escaping)
+sub escape_qq {
+	my $x = shift;
+	$x =~ s/\\/\\\\/g;
+	$x =~ s/"/\\"/g;
+	return $x;
 }
 
 # default method of getting password: ask for it. only relevant for Basic Auth,
