@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.4";
-	$Texapp_PATCH_VERSION = 2;
+	$Texapp_PATCH_VERSION = 3;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -5068,7 +5068,9 @@ sub pmscan {
 	# do not fetch deleted posts here.
 	my $ref = &grabjadn(
 "${chanurl}?channel_types=net.app.core.pm&include_deleted=0&include_recent_message=1&count=200");
-	return if (ref($ref) ne 'ARRAY' || !scalar(@{ $ref }));
+	return if (ref($ref) ne 'ARRAY');
+	$pm_first_time = 0; # assume the fetch was successful
+	return if (!scalar(@{ $ref }));
 
 	&std(($top) ?
 	"-- most recent $top messages on all channels (/pmscan for all channels)\n"
@@ -5083,7 +5085,7 @@ sub pmscan {
 		:
 		sort { $a->{'id'} <=> $b->{'id'} } @{ $ref }
 	;
-	@outarray = @outarray[0..($top-1)];
+	@outarray = @outarray[0..($top-1)] if ($top);
 	@outarray = ($top) ?
 		sort { $a->{'recent_message'}->{'id'}
 			<=> $b->{'recent_message'}->{'id'} } @outarray
@@ -5198,7 +5200,6 @@ sub pmrefresh {
 		$wrapseq++;
 	}
 	$last_pm = &max($last_pm, $max);
-	$pm_first_time = 0 if ($last_pm || !scalar(@{ $my_json_ref }));
 	print $stdout "-- pm bookmark is $last_pm.\n" if ($verbose);
 	&$pmconclude;
 }	
@@ -6363,7 +6364,8 @@ sub get_user {
 	my $json_ref = &grabjadn("${uidurl}\@${user}", 0, 0, 0, undef, 1);
 #TODO
 # try to cache failure, but not transient failure
-	return undef if (!defined($json_ref->{'id'}));
+	return undef if (!$json_ref || ref($json_ref) ne 'HASH' || 
+		!defined($json_ref->{'id'}));
 	$user_id_cache{$json_ref->{'id'}} = $user;
 	return ($user_cache{$user} = $json_ref->{'id'});
 }
@@ -6375,7 +6377,8 @@ sub get_user_by_id {
 	my $json_ref = &grabjadn("${uidurl}${uid}", 0, 0, 0, undef, 1);
 #TODO
 # try to cache failure, but not transient failure
-	return undef if (!defined($json_ref->{'username'}));
+	return undef if (!$json_ref || ref($json_ref) ne 'HASH' || 
+		!defined($json_ref->{'username'}));
 	$user_cache{$json_ref->{'username'}} = $uid;
 	return ($user_id_cache{$uid} = $json_ref->{'username'});
 }
