@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 4;
+	$Texapp_PATCH_VERSION = 5;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	$current_rc_version = 1;
 	# this is kludgy, yes.
@@ -60,7 +60,7 @@ BEGIN {
 		synch exception_is_maskable mentions simplestart
 		location readlinerepaint nocounter notifyquiet
 		signals_use_posix dostream nostreamreplies streamallreplies
-		nofilter personal allats savequit openappnettoo
+		nofilter personal allats savequit openappnettoo multiline
 	); %opts_sync = map { $_ => 1 } qw(
 		ansi pause pmpause texappistas verbose superverbose
 		globalurl homeurl notco noifttt chanurl chanbyidurl
@@ -588,7 +588,7 @@ $fetch_id = $last_id || 0;
 # and we have to do it after loading modules because it might be in one.
 @notifytypes = ();
 if (length($notifytype) && $notifytype ne '0' &&
-		$notifytype ne '1' && !$status) {
+		$notifytype ne '1' && !length($status)) {
 	# NOT $script! scripts have a use case for notifiers!
 
 	%dupenet = ();
@@ -931,7 +931,6 @@ $stringify_args = sub {
 	$resource = join('?', @{ $resource })
 		if (ref($resource) eq 'ARRAY');
 	$l .= "url = \"$resource\"\n";
-	$data = &escape_qq($data);
 	$l .= "data = \"$data\"\n" if length($data);
 	return ("$basecom -K -", $l, undef);
 };
@@ -1036,21 +1035,36 @@ $credentials = '';
 $status = pack("U0C*", unpack("C*", $status))
 	unless ($seven || !length($status) || $LANG =~ /8859/); # kludgy also
 if ($status eq '-') {
-	chomp(@status = <STDIN>);
-	$status = join("\n", @status);
+	my @status;
+	if ($multiline) {
+		while(<STDIN>) {
+			push(@status, $_);
+		}
+		$status = join('', @status);
+	} else {
+		chomp(@status = <STDIN>);
+		$status = join("\n", @status);
+	}
 }
 for(;;) {
 	$rv = 0;
 	die(
 	"sorry, you can't post anonymously. use an authenticated username.\n")
 		if ($anonymous && length($status));
+	$error = ($multiline) ? "or don't use -multiline.\n" 
+		: "or use -autosplit={word,char,cut}.\n";
+	$autosplit = 0 if ($multiline);
 	die(
 "sorry, status too long: reduce by @{[ length($status)-$linelength ]} chars, ".
-"or use -autosplit={word,char,cut}.\n")
+$error)
 		if (length($status) > $linelength && !$autosplit);
+	unless ($multiline) {
 	($status, $next) = &csplit($status, ($autosplit eq 'char' ||
 			$autosplit eq 'cut') ? 1 : 0, $linelength)
 		if (!length($next));
+	} else {
+		$next = '';
+	}
 	if ($autosplit eq 'cut' && length($next)) {
 		print "-- warning: input autotrimmed to $linelength bytes\n";
 		$next = "";
@@ -5809,14 +5823,14 @@ sub updatest {
 		# it's a context
 		$user_name_pm = join(' ',
 			&users_not_me(@{ $pm_object->{'users'} }));
-		$json_user_pm = join('", "@',
+		$json_user_pm = join('\", \"@',
 			&users_not_me(@{ $pm_object->{'users'} }));
 		$cid = $pm_object->{'id'};
 		$maxlength = $pmlength;
 	} elsif(ref($pm_object) eq 'ARRAY') {
 		# it's a list of names
 		$user_name_pm = join(' ', @{ $pm_object });
-		$json_user_pm = join('", "@',
+		$json_user_pm = join('\", \"@',
 			&users_not_me(@{ $pm_object }));
 		$cid = 'pm';
 		$maxlength = $pmlength;
@@ -5943,7 +5957,7 @@ sub updatest {
 	my $geo_anno = '';
 	if (!$rp_id && defined $lat && defined $long && $location) {
 		print $stdout "-- using lat/long: ($lat, $long)\n";
-		$geo_anno = ", \"annotations\":[{ \"type\": \"net.app.core.geolocation\", \"value\": { \"latitude\": $lat, \"longitude\": $long }}]";
+		$geo_anno = ", \\\"annotations\\\":[{ \\\"type\\\": \\\"net.app.core.geolocation\\\", \\\"value\\\": { \\\"latitude\\\": $lat, \\\"longitude\\\": $long }}]";
 	} elsif ((defined $lat || defined $long) && $location && !$rp_id) {
 		print $stdout
 		"-- warning: incomplete location ($lat, $long) ignored\n";
@@ -5953,7 +5967,7 @@ sub updatest {
 
 	# YES, you *can* verify and slowpost. I thought about this and I
 	# think I want to allow it.
-	if ($verify && !$status) {
+	if ($verify && !length($status)) {
 		my $answer;
 
 		print $stdout
@@ -5968,26 +5982,27 @@ sub updatest {
 
 	if ($user_name_pm) {
 		@method = @wjnd;
-		my $ustring = &escape_qq($string);
+		my $ustring = &encodejson($string);
 		if ($cid eq 'pm') {
 			# this is already in the right format.
 			chomp($i = <<"EOF");
-{ "text" : "$ustring", "destinations" : ["\@${json_user_pm}"]${geo_anno}}
+{ \\\"text\\\" : \\\"$ustring\\\", \\\"destinations\\\" : [\\\"\@${json_user_pm}\\\"]${geo_anno}}
 EOF
 		} else {
 			chomp($i = <<"EOF");
-{ "text" : "$ustring" ${geo_anno}}
+{ \\\"text\\\" : \\\"$ustring\\\" ${geo_anno}}
 EOF
 		}
 	} elsif (length($geo_anno)) {
 		@method = @wjnd;
-		my $ustring = &escape_qq($string);
+		my $ustring = &encodejson($string);
 		chomp($i = <<"EOF");
-{ "text" : "$ustring" ${geo_anno}}
+{ \\\"text\\\" : \\\"$ustring\\\" ${geo_anno}}
 EOF
 	}
 
-	$slowpost += 0; if ($slowpost && !$script && !$status && !$silent) {
+	$slowpost += 0;
+	if ($slowpost && !$script && !length($status) && !$silent) {
 		if($pid = open(SLOWPOST, '-|')) {
 			# pause background so that it doesn't kill itself
 			# when this signal occurs.
@@ -8760,7 +8775,7 @@ sub descape {
 			$x = "\n$x" if ($nlc > 2);
 		}
 	}
-	$x =~ s#\\\\#\\#sg;
+	#$x =~ s#\\\\#\\#sg;
 
 	# try to do something sensible with unicode
 	if ($mode) { # this probably needs to be revised
@@ -9109,12 +9124,26 @@ sub url_oauth_sub {
 	$x =~ s/([^-0-9a-zA-Z._~])/"%".uc(unpack("H*",$1))/eg; return $x;
 }
 
-# simple encoder for JSON (mostly escaping)
-sub escape_qq {
+# simple json encoder
+sub encodejson {
 	my $x = shift;
-	$x =~ s/\\/\\\\/g;
-	$x =~ s/\n/\\n/sg;
-	$x =~ s/"/\\"/g;
+	
+	# Unicode-encode the literal \s, it's easier to handle.
+	# do this like parsejson does using a unique sequence.
+	my $bbqqmask = "BBQQ";
+	my $seed = 0;
+	$seed++ while ($x =~ /$bbqqmask$seed/);
+	$bbqqmask .= $seed;
+	1 while ($x =~ s/\\/$bbqqmask/);
+	$x =~ s/$bbqqmask/'\\\u005c'/eg;
+
+	# \n and \"
+	$x =~ s/\n/\\\\n/sg;
+	$x =~ s/"/\\\\"/g;
+
+	# \u escape everything else, even stuff that might not need to be.
+	$x = &uforcemulti($x);
+	$x =~ s/([^-0-9a-zA-Z._~\\ ])/'\\\u'.sprintf("%04x", ord($1))/eg;
 	return $x;
 }
 
