@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 3;
+	$Texapp_PATCH_VERSION = 4;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	$current_rc_version = 1;
 	# this is kludgy, yes.
@@ -4557,8 +4557,12 @@ EOF
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^ki ([^\s]+) /) {
 			my $key = $1;
-			my $module;
-			sysread(STDIN, $module, 8192);
+			my $module = '';
+			my $buf = '';
+			while(length($module) < 8192) {
+				sysread(STDIN, $buf, 8192);
+				$module .= $buf;
+			}
 			$module =~ s/\s+$//;
 			$module = pack("H*", $module);
 			print $stdout "-- fetch for module $module key $key\n"
@@ -4569,8 +4573,12 @@ EOF
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^kn ([^\s]+) /) {
 			my $key = $1;
-			my $module;
-			sysread(STDIN, $module, 8192);
+			my $module = '';
+			my $buf = '';
+			while(length($module) < 8192) {
+				sysread(STDIN, $buf, 8192);
+				$module .= $buf;
+			}
 			$module =~ s/\s+$//;
 			$module = pack("H*", $module);
 			print $stdout "-- nulled module $module key $key\n"
@@ -4579,12 +4587,20 @@ EOF
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^ko ([^\s]+) /) {
 			my $key = $1;
-			my $value;
-			my $module;
-			sysread(STDIN, $module, 8192);
+			my $value = '';
+			my $module = '';
+			my $buf = '';
+			while(length($module) < 8192) {
+				sysread(STDIN, $buf, 8192);
+				$module .= $buf;
+			}
 			$module =~ s/\s+$//;
 			$module = pack("H*", $module);
-			sysread(STDIN, $value, 8192);
+			$buf = '';
+			while(length($value) < 8192) {
+				sysread(STDIN, $buf, 8192);
+				$value .= $buf;
+			}
 			$value =~ s/\s+$//;
 			print $stdout
 				"-- set module $module key $key = $value\n"
@@ -4606,7 +4622,11 @@ EOF
 			if ($comm eq '?') {
 				print P substr("${$key}$space_pad", 0, 8192);
 			} else {
-				sysread(STDIN, $value, 8192);
+				$value = $buf = '';
+				while (length($value) < 8192) {
+					sysread(STDIN, $buf, 8192);
+					$value .= $buf;
+				}
 				$value =~ s/\s+$//;
 				$interactive = ($comm eq '+') ? 0 : 1;
 				&send_removereadline if
@@ -7531,6 +7551,7 @@ sub synckey {
 	print C
 	(substr("${commchar}$key                           ", 0, 19) . "\n");
 	print C (substr(($value . $space_pad), 0, 8192));
+	sleep 1;
 }
 
 # getter for internal variables. right now this just returns the variable by
@@ -7543,10 +7564,14 @@ sub getvariable {
 	if ($key eq 'effpause' ||
 			$key eq 'rate_limit_rate' ||
 			$key eq 'rate_limit_left') {
-		my $value;
+		my $value = '';
+		my $buf = '';
 		kill $SIGUSR2, $child if ($child);
 		print C (substr("?$key                    ", 0, 19) . "\n");
-		sysread(W, $value, 8192);
+		while (length($value) < 8192) {
+			sysread(W, $buf, 8192);
+			$value .= $buf;
+		}
 		$value =~ s/\s+$//;
 		return $value;
 	}
