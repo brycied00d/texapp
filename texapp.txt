@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.4";
-	$Texapp_PATCH_VERSION = 0;
+	$Texapp_PATCH_VERSION = 1;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -3195,6 +3195,11 @@ if(0) {
 				return 0;
 			}
 			$context = &pmchanneltocontext($json_ref);
+			if (!$context) {
+				print $stdout
+					"-- failed to get channel for $code\n";
+				return 0;
+			}
 		} else {
 			$context = &get_pm_context($code);
 			if (!defined($context->{'id'})) {
@@ -4198,7 +4203,7 @@ EOF
 				if ($rout =~ /^reset(\d+)/);
 			if ($rout =~ /^pm/) {
 				&pmrefresh($interactive);
-				&send_repaint if ($termrl);
+				# &send_repaint if ($termrl);
 				$pmcount = $pmpause;
 				goto DONT_REFRESH;
 			}
@@ -4848,9 +4853,9 @@ sub sflush {
 	return if ($suspend_output > 0);
 	return if (!scalar(@stream_buf));
 
+	my @buf = @stream_buf; @stream_buf = ();
 	&send_removereadline if ($termrl);
-	map { $aa = $_->[0]; print $aa "$_->[1]" } @stream_buf;
-	@stream_buf = ();
+	map { $aa = $_->[0]; print $aa "$_->[1]" } @buf;
 	$wrapseq = 1;
 	&send_repaint if ($termrl);
 }
@@ -5080,6 +5085,11 @@ sub pmscan {
 		my $j = $k->{'recent_message'};
 		my $l = &pmchanneltocontext($k);
 
+		if (!$l) {
+			&std("** transient error getting channel\n");
+			next;
+		}
+
 		&assign_pm_key($j, $l);
 		&pmoutstack($j, $l);
 		$max = &max($max, $j->{'id'});
@@ -5104,6 +5114,7 @@ sub pmrefresh {
 		print $stdout
 			"-- sorry, you can't read PMs if you're anonymous.\n"
 			if ($interactive);
+		$wrapseq = 1;
 		return;
 	}
 
@@ -5140,7 +5151,11 @@ sub pmrefresh {
 			next if (ref($ms_ref) ne 'ARRAY' ||
 				!scalar(@{ $ms_ref })); # hmmm ....
 
-			$context_cache{$cid} = &pmchanneltocontext($c);
+			my $ct = &pmchanneltocontext($c);
+			if (!$ct) { print $stdout
+"-- transient failure converting to context; skipping channel\n"
+				if ($verbose); next; }
+			$context_cache{$cid} = $ct;
 			print $stdout
 "-- fetched @{[ scalar(@{ $ms_ref }) ]} new messages for channel $cid\n"
 				if ($verbose);
@@ -5171,12 +5186,12 @@ sub pmrefresh {
 		&assign_pm_key($m, $context);
 		&pmoutstack($m, $context);
 		$max = $m->{'id'};
+		$wrapseq++;
 	}
 	$last_pm = &max($last_pm, $max);
 	$pm_first_time = 0 if ($last_pm || !scalar(@{ $my_json_ref }));
 	print $stdout "-- pm bookmark is $last_pm.\n" if ($verbose);
 	&$pmconclude;
-	$wrapseq = 1;
 }	
 
 # post an update
@@ -5664,10 +5679,13 @@ sub pmchanneltocontext {
 	# assign owner and usernames
 	$new_context{'owner'} = $context->{'owner'}->{'username'};
 	@unames = map { &get_user_by_id($_) } (keys %uids);
+
+	# it is possible for errors to make @unames fail. if it has null
+	# names, return an undef
+	return undef if(scalar(grep { !length($_) } @unames));
+
 	$new_context{'users'} = \@unames;
-
 	$new_context{'id'} = $context->{'id'};
-
 	return \%new_context;
 }
 sub users_not_me {
