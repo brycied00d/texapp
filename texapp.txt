@@ -30,8 +30,9 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 0;
+	$Texapp_PATCH_VERSION = 1;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
+	$current_rc_version = 1;
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
 			$ENV{'ALL'};
@@ -67,8 +68,8 @@ BEGIN {
 		colourpm colourreply colourwarn coloursearch colourlist idurl
 		notifies filter colourdefault backload backtrack searchhits
 		nostreamreplies mentions wtrendurl atrendurl filterusers
-		filterats filterrts filteratonly filterflags nofilter
-		colourfollow colouralien allats threads
+		filterats filterrps filteratonly filterflags filterclients
+		nofilter colourfollow colouralien allats threads filterthreads
 	); %opts_urls = map {$_ => 1} qw(
 		url chanurl uurl rurl wurl uidurl rlurl update shorturl
 		globalurl homeurl chanbyidurl chanmsbyidurl
@@ -85,8 +86,8 @@ BEGIN {
 	); %opts_secret = map { $_ => 1} qw(
 		superverbose texappistas
 	); %opts_comma_delimit = map { $_ => 1 } qw(
-		lists notifytype notifies filterflags filterrts filterats
-		filterusers filteratonly threads
+		lists notifytype notifies filterflags filterrps filterats
+		filterusers filteratonly filterthreads threads
 	); %opts_space_delimit = map { $_ => 1 } qw(
 		track
 	);
@@ -109,12 +110,13 @@ BEGIN {
 		creliurl delliurl deluliurl crefliurl delfliurl atrendurl
 		getuliurl getufliurl rturl rpsofidurl wtrendurl fridurl
 		statusliurl followliurl leaveliurl nostreamreplies
-		filterusers filterats filterrts filterflags alsopost
+		filterusers filterats filterrps filterflags alsopost
 		filteratonly nofilter favsofidurl allats threads savequit
+		filterclients filterthreads
 	); %opts_others = map { $_ => 1 } qw(
 		curl seven silent maxhist noansi hold status
 		daemon timestamp user anonymous script readline
-		leader ssl rc norc vcheck apibase notifytype exts
+		leader ssl rc norc rc_version vcheck apibase notifytype exts
 		nonewrps synch runcommand bearertoken
 		credurl keyf readlinerepaint personal
 		simplestart exception_is_maskable oldperl
@@ -123,6 +125,7 @@ BEGIN {
 	); %valid = (%opts_can_set, %opts_others);
 	$rc = (defined($rc) && length($rc)) ? $rc : "";
 	$rcf = '';
+	$using_rc_file = 0;
 	unless ($norc) {
 		$rcf = # make this global, savestate will use it.
 			($rc =~ m#^/#) ? $rc : "$ENV{'HOME'}/.texapprc${rc}";
@@ -149,6 +152,7 @@ BEGIN {
 				}
 			}
 			close(W);
+			$using_rc_file = 1;
 		} elsif (length($rc)) {
 			die("couldn't access rc file $rcf: $!\n".
 	"to use defaults, use -norc or don't specify the -rc option.\n\n");
@@ -400,8 +404,10 @@ if ($script) {
 	$savequit = 0;
 }
 
+### NO MORE AUTOMATIC MODIFICATION OF VARIABLES BEYOND THIS POINT ###
+
 ### now instantiate the Texapp dynamic API ###
-### based off the defaults later in script. ####
+### based off the defaults later in script ###
 
 # first we need to load any extensions specified by -exts.
 if (length($exts) && $exts ne '0') {
@@ -534,6 +540,44 @@ if ($termrl) {
 		$l_autocompletion || \&defaultautocompletion;
 }
 
+### update the configuration file for the user *iff* ALL of the following: ###
+# - savequit is on
+# - there is no version key in the conf file or the version key is < current
+# issue a warning if there is a version key in the conf file < current
+# if neither case is true, nothing happens
+# this has to occur after the API is loaded so that extensions can intervene
+
+if ($using_rc_file) {
+	unless ($savequit) {
+		if (defined($rc_version) && $rc_version < $current_rc_version){
+			print
+"** your RC file is version $rc_version, current is $current_rc_version\n".
+"** some default settings or internal URLs may have changed\n".
+"** new features in this version of Texapp may not behave correctly\n".
+"** not automatically modifying it (restart with -savequit if you want this)\n"
+."\n"
+				unless ($silent);
+		}
+	} elsif (0+$rc_version < $current_rc_version) {
+		$rc_version += 0;
+		print
+"** your RC file is version $rc_version, automatically updating\n"
+			unless ($silent);
+		# cascade through the versions
+		if ($rc_version < 1) {
+			print "** updating to version 1\n" unless ($silent);
+
+			# fix track, force bearertoken out of rc file
+			$queryurl = "${apibase}/posts/search"
+			if ($queryurl eq "${apibase}/search/posts.json");
+				$rc_version = 1;
+		}
+
+		# done with cascade
+		&savestate;
+	}
+}
+
 # fetch_id is based off last_id, if an extension set it
 $fetch_id = $last_id || 0;
 
@@ -577,10 +621,12 @@ $backtrack ||= &max(int(20 / &max(1, scalar(@tracktags))), 5)
 
 # compile filters
 exit(1) if (!&filter_compile);
-$filterusers_sub = &filteruserlist_compile(undef, $filterusers);
-$filterrts_sub = &filteruserlist_compile(undef, $filterrts);
-$filteratonly_sub = &filteruserlist_compile(undef, $filteratonly);
+$filterusers_sub = &filterlist_compile(undef, $filterusers);
+$filterrps_sub = &filterlist_compile(undef, $filterrps);
+$filteratonly_sub = &filterlist_compile(undef, $filteratonly);
+$filterthreads_sub = &filterlist_compile(undef, $filterthreads);
 exit(1) if (!&filterats_compile);
+exit(1) if (!&filterclients_compile);
 
 # compile lists
 exit(1) if (!&list_compile);
@@ -1028,7 +1074,7 @@ for(;;) {
 		}
 	}
 	if ($rv || &is_fail_whale($data) || &is_json_error($data)) {
-		if ($rv == 97) {
+		if ($rv == 96 || $rv == 97 || $rv == 99) {
 			print "post CANCELLED!\n";
 			exit(1);
 		} elsif (&is_fail_whale($data)) {
@@ -1681,14 +1727,14 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 				"'}";
 				my $sfv;
 				eval "\$sfv = &descape(\$post->$sfk);";
-				print $stdout
+				print $streamout
 				substr("$sfn                          ", 0, 25).
 					" $sfv\n";
 				$sn = $sfv if (!length($sn) && length($sfv));
 			}
 			foreach $k (sort keys %{ $post }) {
 				next if (ref($post->{$k}));
-				print $stdout
+				print $streamout
 				substr("$k                          ", 0, 25) .
 					" " . &descape($post->{$k}) . "\n";
 			}
@@ -1699,7 +1745,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 			print $stdout
 			"-- %URL% is now $urlshort (/short to shorten)\n";
 			return 0;
-		} # if dxxxx, fall through to the below.
+		} # if Pxxxx, fall through to the below.
 	}
 
 	# PM dumper
@@ -1742,7 +1788,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 				"'}";
 			my $sfv;
 			eval "\$sfv = &descape(\$pm->$sfk);";
-			print $stdout
+			print $streamout
 				substr("$sfn                          ", 0, 25).
 				" $sfv\n";
 			$sn = $sfv if (!length($sn) && length($sfv));
@@ -1750,7 +1796,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 
 		foreach $k (sort keys %{ $pm }) {
 			next if (ref($pm->{$k}));
-			print $stdout
+			print $streamout
 				substr("$k                          ", 0, 25) .
 					" " . &descape($pm->{$k}) . "\n";
 		}
@@ -1758,18 +1804,18 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 		# if we didn't generate this, there is no context to iterate.
 		return 0 if (!defined($context));
 
-		print $stdout "\n_texapp_context\n---------------\n";
+		print $streamout "\n_texapp_context\n---------------\n";
 		# this is a synthetic object we generate, so we don't need to
 		# be quite so paranoid.
 		foreach $k (sort keys %{ $context }) {
 			$m = $context->{$k};
-			print $stdout
+			print $streamout
 				substr("$k                          ", 0, 25)
 				. " ";
 			if (ref($m) eq 'ARRAY') {
-				print $stdout join(" ", @{ $m }), "\n";
+				print $streamout join(" ", @{ $m }), "\n";
 			} else {
-				print $stdout "$m\n";
+				print $streamout "$m\n";
 			}
 		}
 		return 0;
@@ -2217,8 +2263,8 @@ if(0) {
 
 	# thread-id based threading
 	# /th <pa0 is understood as /th <pa0 pa0
-	if (($lead_id) && ($_ eq '/th' || $_ eq '/thread')) {
-		$_ = "/th $lead_code"; # lead_id is already set
+	if (($lead_id) && (m#^/th(read)?(m|af|maf|afollow|mafollow)?$#)) {
+		$_ .= " $lead_code"; # lead_id is already set
 		# and fall through
 	}
 	
@@ -2270,6 +2316,24 @@ if(0) {
 		}
 		}
 	}
+	if (m#^/th(read)?unb(lock)?\s*all$#) {
+		$_ = "/unset filterthreads";
+		# and fall through
+	}
+	if (m#^/th(read)?(un)?b(lock)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $mode = lc($2);
+		my $code = lc($4);
+		my $post = &get_original_post($code);
+		if (!defined($post) || !$post->{'id'}) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+		my $id = $post->{'thread_id'} || $post->{'id'};
+		$_ = ($mode eq 'un') ? "/del" : "/add";
+		$_ .= " filterthreads $id";
+		# and fall through
+	}
+
 	if (m#^/th(read)?f(ollow)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $code = lc($3);
 		my $post = &get_original_post($code);
@@ -2773,7 +2837,8 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		return 0;
 	}
 
-	# pull out entities. this works for PMs and posts.
+	# pull out entities. this works for PMs and posts. this also needs to
+	# check for oembed annotations because those may also be links.
 	if (m#^/ent?(ities)? ([pP]?[zZ]?[a-zA-Z]?[0-9]+)$#) {
 		my $v;
 		my $w;
@@ -2813,6 +2878,8 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		}
 		
 		my $didprint = 0;
+		my %urls;
+		# iterate over entities
 		foreach $w (qw(links)) {
 			my $p = $hash->{'entities'}->{$w};
 			next if (!defined($p) || ref($p) ne 'ARRAY');
@@ -2822,16 +2889,36 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 					 !length($v->{'text'}));
 				my $u1 = &descape($v->{'text'});
 				my $u2 = &descape($v->{'url'});
-				print $stdout "$u1 => $u2\n";
+				print $streamout "$u1 => $u2\n";
 				$urlshort = $u2;
+				$urls{&urlnoproto($u2)}++;
 				$didprint++;
 			}
 		}
+		# iterate over oembed annotations
+		my $haz_annos = $hash->{'annotations'};
+		if (scalar(@{ $haz_annos })) {
+			my $a;
+			foreach $a (@{ $haz_annos }) {
+				next if ($a->{'type'} ne 'net.app.core.oembed');
+				my $u1 = &descape(
+					$a->{'value'}->{'embeddable_url'});
+				$u1 ||= &descape($a->{'value'}->{'url'});
+				&std("-- oembed URL found: $u1\n")
+					if ($verbose);
+				next if (!length($u1) ||
+					$urls{&urlnoproto($u1)});
+				print $streamout "[oembed] => $u1\n";
+				$urlshort = $u1;
+				$didprint++;
+			}
+		}
+		
 		if ($didprint) {
 			print $stdout &wwrap(
 	"-- %URL% is now $urlshort (/url opens)\n");
 		} else {
-			print $stdout "-- no entity URLs found\n";
+			print $stdout "-- no entity or embedded URLs found\n";
 		}
 		return 0;
 	}
@@ -2892,8 +2979,10 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 				my $w;
 				my $v;
 				my $didprint = 0;
+				my %urls;
 
-				# ADN puts entities in multiple fields.
+				# entities or oembed can be link sources.
+				# don't duplicate.
 				foreach $w (qw(links)) {
 					my $p = $hash->{'entities'}->{$w};
 					next if (!defined($p) ||
@@ -2903,6 +2992,26 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 							ref($v) ne 'HASH');
 						next if (!length($v->{'url'}));
 						my $u1 = &descape($v->{'url'});
+						next if ($urls{
+							&urlnoproto($u1)}++);
+						&openurl($u1);
+						$didprint++;
+					}
+				}
+				my $haz_annos = $hash->{'annotations'};
+				if (scalar(@{ $haz_annos })) {
+					my $a;
+					foreach $a (@{ $haz_annos }) {
+						next if ($a->{'type'}
+						ne 'net.app.core.oembed');
+						my $u1 = &descape(
+					$a->{'value'}->{'embeddable_url'});
+						$u1 ||=
+					&descape($a->{'value'}->{'url'});
+					&std("-- oembed URL found: $u1\n")
+						if ($verbose);
+					next if (!length($u1) ||
+						$urls{&urlnoproto($u1)}++);
 						&openurl($u1);
 						$didprint++;
 					}
@@ -3378,8 +3487,11 @@ if(0) {
 		my %did_mentions = map { $_ => 1 } (lc($target));
 		my $reply_post = &descape($post->{'text'}) . ' @' . $original;
 
-		while($reply_post =~ s/\@(\w+)//) {
-			my $name = $1;
+		#while($reply_post =~ s/\@(\w+)//) {
+		# use the same regex as standardpost so that the behaviour
+		# is consistent.
+		while($reply_post =~ s/(^|[^a-zA-Z0-9_]|\\n)\@([a-zA-Z0-9_\/]+)/\1/) {
+			my $name = $2;
 			my $mame = lc($name); # preserve camel case
 			next if ($mame eq $whoami || $did_mentions{$mame}++);
 			if ($appendtype eq 'a') {
@@ -4509,25 +4621,32 @@ EOF
 						if ($key eq 'threads');
 					&filter_compile
 						if ($key eq 'filter');
+					&filterclients_compile
+						if ($key eq 'filterclients');
 					&notify_compile
 						if ($key eq 'notifies');
 					&list_compile
 						if ($key eq 'lists');
 					&filterflags_compile
 						if ($key eq 'filterflags');
-					$filterrts_sub =
-						&filteruserlist_compile(
-							$filterrts_sub, $value)
-						if ($key eq 'filterrts');
+					$filterrps_sub =
+						&filterlist_compile(
+							$filterrps_sub, $value)
+						if ($key eq 'filterrps');
 					$filterusers_sub =
-						&filteruserlist_compile(
+						&filterlist_compile(
 							$filterusers_sub,$value)
 						if ($key eq 'filterusers');
 					$filteratonly_sub =
-						&filteruserlist_compile(
+						&filterlist_compile(
 							$filteratonly_sub,
 								$value)
 						if ($key eq 'filteratonly');
+					$filterthreads_sub =
+						&filterlist_compile(
+							$filterthreads_sub,
+								$value)
+						if ($key eq 'filterthreads');
 					&filterats_compile
 						if ($key eq 'filterats');
 				}
@@ -5271,17 +5390,24 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 					{'repost_of'}->
 					{'user'}->{'username'}))));
 
-			# second, filterrts. this is almost as fast.
+			# first-a, filterthreads. this is also very fast.
+			my $thread = &descape($j->{'thread_id'});
 			(&killtw($j), next) if
-				($filterrts_sub &&
+				($thread &&
+				 $filterthreads_sub &&
+				&$filterthreads_sub($thread));
+
+			# second, filterrps. this is almost as fast.
+			(&killtw($j), next) if
+				($filterrps_sub &&
 				 length($j->{'repost_of'}->{'id'})&&
-				&$filterrts_sub($sn));
+				&$filterrps_sub($sn));
 
 			# second-a. get the source, see if this is a blocked
 			# source (-noifttt).
 			my $source = &descape($j->{'source'}->{'name'});
 			(&killtw($j), next) if
-				($noifttt &
+				($noifttt &&
 				 $source eq 'IFTTT');
 
 			# third, filteratonly. this has a fast case and a
@@ -5303,6 +5429,10 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 			# fifth, filterats. this is somewhat expensive.
 			(&killtw($j), next) if ($filterats_c &&
 				&$filterats_c($tex));
+
+			# sixth, filterclients. this is very expensive.
+			(&killtw($j), next) if ($filterc_c &&
+				&$filterc_c($source));
 			
 			# finally, classic -filter. this is the most expensive.
 			(&killtw($j), next) if ($filter_c && &$filter_c($tex));
@@ -5941,6 +6071,7 @@ sub savestate {
 	# enumerate all variables and -extpref_* variables
 	foreach $key (sort keys %valid) { # not just can_set
 		print B "${key}=$$key\n" if (length($$key) &&
+			$key ne 'bearertoken' && # safety
 			$key ne 'readline'); # some users may set this
 	}
 	foreach $key (keys %main::) {
@@ -6218,7 +6349,7 @@ $post =~ s/(^|[^a-zA-Z0-9])($h)([^a-zA-Z0-9]|$)/\1${EM}\2${colour}\3/ig
 		my $botsub = substr($post, $k);
 		my $topsub = substr($post, 0, $k);
 		$botsub =~
-s/(^|[^a-zA-Z0-9_])\@([a-zA-Z0-9_\/]+)/\1\@${UNDER}\2${colour}/g;
+s/(^|[^a-zA-Z0-9_]|\\n)\@([a-zA-Z0-9_\/]+)/\1\@${UNDER}\2${colour}/g;
 		$post = $topsub . $botsub;
 	}
 
@@ -7299,15 +7430,19 @@ sub setvariable {
 			&notify_compile if ($key eq 'notifies');
 			&list_compile if ($key eq 'lists');
 			&filterflags_compile if ($key eq 'filterflags');
-			$filterrts_sub = &filteruserlist_compile(
-				$filterrts_sub, $value)
-					if ($key eq 'filterrts');
-			$filterusers_sub = &filteruserlist_compile(
+			&filterclients_compile if ($key eq 'filterclients');
+			$filterrps_sub = &filterlist_compile(
+				$filterrps_sub, $value)
+					if ($key eq 'filterrps');
+			$filterusers_sub = &filterlist_compile(
 				$filterusers_sub,$value)
 					if ($key eq 'filterusers');
-			$filteratonly_sub = &filteruserlist_compile(
+			$filteratonly_sub = &filterlist_compile(
 				$filteratonly_sub, $value)
 					if ($key eq 'filteratonly');
+			$filterthreads_sub = &filterlist_compile(
+				$filterthreads_sub, $value)
+					if ($key eq 'filterthreads');
 			&filterats_compile if ($key eq 'filterats');
 
 			# transmit to background process sync-ed values
@@ -7420,6 +7555,8 @@ sub openurl {
 	print $stdout "($comm)\n";
 	system("$comm");
 }
+
+sub urlnoproto { my $url = shift; $url =~ s/^[^:]+://; return $url; }
 
 sub urlshorten {
 	my $url = shift;
@@ -7611,10 +7748,10 @@ sub filterflags_compile {
 	%filter_attribs = map { $_ => 1 } split(/\s*,\s*/, $s);
 }
 
-# -filterrts and -filterusers compiler. these simply use a list of usernames,
-# so they are fast and the same code suffices. emit code to compile that
-# just is one if-expression after another.
-sub filteruserlist_compile {
+# this is a generic compiler for filter expressions consisting of a simple
+# list without regexes, so they are fast and the same code suffices. emit
+# code to compile that's just one if-expression after another.
+sub filterlist_compile {
 	my $old = shift;
 	my $s = shift;
 	undef $k;
@@ -7633,7 +7770,7 @@ EOF
 #	print $stdout $uuus;
 	eval $uuus;
 	if (!defined($k)) {
-		print $stdout "** bogus name in user list (error = $@)\n";
+		print $stdout "** bogus name in list (error = $@)\n";
 		return $old;
 	}
 	return $k;
@@ -7690,6 +7827,28 @@ EOF
 		eval $b;
 		if (!defined($filter_c)) {
 			print $stdout ("** syntax error in your filter: $@\n");
+			return 0;
+		}
+	}
+	return 1;
+}
+
+sub filterclients_compile {
+	undef $filterc_c;
+	if (length($filterclients)) {
+		my $tfilter = $filterclients;
+		$tfilter =~ s/^['"]//;
+		$tfilter =~ s/['"]$//;
+		my $b = <<"EOF";
+		\$filterc_c = sub {
+			local \$_ = shift;
+			return ($tfilter);
+		};
+EOF
+		#print $b;
+		eval $b;
+		if (!defined($filterc_c)) {
+			&std("** syntax error in your filterclients: $@\n");
 			return 0;
 		}
 	}
@@ -8180,7 +8339,7 @@ sub normalizejson {
 	$i->{'_texapp_has_entity_links'} = 1 if (ref($haz_entilinks) eq 'ARRAY'
 		&& scalar(@{ $haz_entilinks }));
 
-	# set geolocation data
+	# scan annotations
 	my $haz_annos = $i->{'annotations'};
 	if (scalar(@{ $haz_annos })) {
 		my $a_ref;
@@ -8190,6 +8349,9 @@ sub normalizejson {
 					$a_ref->{'value'}->{'latitude'};
 				$i->{'_texapp_longitude'} =
 					$a_ref->{'value'}->{'longitude'};
+			} elsif ($a_ref->{'type'} eq 'net.app.core.oembed') {
+				# treat oembed URLs as entity links
+				$i->{'_texapp_has_entity_links'} = 1;
 			}
 		}
 	}
@@ -8310,7 +8472,7 @@ sub parsejson {
 
 	# and then we're going to turn the inline ones all back except
 	# ssqq, which we'll do last so that our syntax checker still works.
-	$data =~ s/$bbqqmask/\\\\\\\\/g; # yes, eight. descape reverses this.
+	$data =~ s/$bbqqmask/\\\\/g; 
 	$data =~ s/$ddqqmask/"/g;
 
 	print $stdout "$data\n" if ($superverbose);
@@ -8534,8 +8696,7 @@ sub descape {
 			$x = "\n$x" if ($nlc > 2);
 		}
 	}
-	$x =~ s#\\\\#\\#g;
-	$x =~ s#\\/#/#g;
+	$x =~ s#\\\\#\\#sg;
 
 	# try to do something sensible with unicode
 	if ($mode) { # this probably needs to be revised
