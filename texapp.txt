@@ -29,8 +29,8 @@ BEGIN {
 	}
 	
 	$command_line = $0; $0 = "texapp";
-	$Texapp_VERSION = "0.2";
-	$Texapp_PATCH_VERSION = 4;
+	$Texapp_VERSION = "0.3";
+	$Texapp_PATCH_VERSION = 0;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -57,7 +57,7 @@ BEGIN {
 		synch exception_is_maskable mentions simplestart
 		location readlinerepaint nocounter notifyquiet
 		signals_use_posix dostream nostreamreplies streamallreplies
-		nofilter personal
+		nofilter personal allats
 	); %opts_sync = map { $_ => 1 } qw(
 		ansi pause dmpause texappistas verbose superverbose
 		globalurl homeurl notco noifttt
@@ -67,7 +67,7 @@ BEGIN {
 		notifies filter colourdefault backload searchhits dmsenturl
 		nostreamreplies mentions wtrendurl atrendurl filterusers
 		filterats filterrts filteratonly filterflags nofilter
-		colourfollow colouralien
+		colourfollow colouralien allats threads
 	); %opts_urls = map {$_ => 1} qw(
 		url dmurl uurl rurl wurl uidurl rlurl update shorturl
 		globalurl homeurl
@@ -84,7 +84,7 @@ BEGIN {
 		superverbose texappistas
 	); %opts_comma_delimit = map { $_ => 1 } qw(
 		lists notifytype notifies filterflags filterrts filterats
-		filterusers filteratonly
+		filterusers filteratonly threads
 	); %opts_space_delimit = map { $_ => 1 } qw(
 		track
 	);
@@ -107,7 +107,7 @@ BEGIN {
 		getuliurl getufliurl dmsenturl rturl rpsofidurl wtrendurl
 		statusliurl followliurl leaveliurl dmidurl nostreamreplies
 		filterusers filterats filterrts filterflags
-		filteratonly nofilter favsofidurl
+		filteratonly nofilter favsofidurl allats threads
 	); %opts_others = map { $_ => 1 } qw(
 		curl seven silent maxhist noansi hold status
 		daemon timestamp user anonymous script readline
@@ -573,6 +573,9 @@ exit(1) if (!&filterats_compile);
 
 # compile lists
 exit(1) if (!&list_compile);
+
+# compile threads
+&threads_compile($threads, 0);
 
 # finally, compile notifies. we do this regardless of notifytype, so that
 # an extension can look at it if it wants to.
@@ -1354,6 +1357,16 @@ sub send_removereadline {
 	$termrl->removereadline;
 	$removereadlinecache = sub { $termrl->removereadline; };
 }
+sub s {
+	if ($is_background) {
+		push(@stream_buf, [ @_ ]);
+	} else {
+		my $aa = $_[0];
+		print $aa "$_[1]";
+	}
+}
+sub std { &s($stdout, @_); }
+sub sto { &s($streamout, @_); }
 
 # start the background process
 # this has to be last or the background process can't see the full API
@@ -1967,6 +1980,63 @@ if(0) {
 		# and fall through to set
 	}
 
+	# threading
+	if (m#^/th(read)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $countmaybe = $2;
+		my $code = lc($3);
+		my $post = &get_post($code);
+		if (!defined($post) || !$post->{'id'}) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+
+		my $id;
+		my $insert;
+
+		if ($post->{'repost_of'}->{'id'}) {
+			# stick this into the thread as if it were threaded,
+			# but fetch the reposted post instead.
+			$id = $post->{'repost_of'}->{'id'};
+			$insert = $post;
+		} else {
+			$id = $post->{'id'};
+			$insert = undef;
+		}
+		my $json_ref = &grabjadn(&urlp($thurl,,$id), 0,0,$countmaybe, {
+			"type" => "thread",
+			"payload" => $id
+		}, 1);
+		if ($json_ref && ref($json_ref) eq 'ARRAY') {
+			unshift(@{ $json_ref }, $insert) if ($insert);
+		}
+		&dt_tdisplay($json_ref, 'thread', 0, $id);
+		return 0;
+	}
+	if (m#^/th(read)?f(ollow)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $code = lc($3);
+		my $post = &get_original_post($code);
+		if (!defined($post) || !$post->{'id'}) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+		&add_thread($post->{'thread_id'} || $post->{'id'}, 1);
+		return 0;
+	}
+	if (m#^/th(read)?unf(ollow)?\s*all$#) {
+		$_ = "/unset threads";
+		# and fall through
+	}
+	if (m#^/th(read)?unf(ollow)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $code = lc($3);
+		my $post = &get_original_post($code);
+		if (!defined($post) || !$post->{'id'}) {
+			print $stdout "-- no such post (yet?): $code\n";
+			return 0;
+		}
+		$_ = "/del threads ".($post->{'thread_id'} || $post->{'id'});
+		# and fall through
+	}
+
 	# setter for internal value settings
 	# shortcut for boolean settings
 	if (/^\/s(et)? ([^ ]+)\s*$/) {
@@ -2033,6 +2103,7 @@ if(0) {
 			1 while ($old =~ s/^$value$del//);
 			1 while ($old =~ s/$del$value//);
 		}
+		$old = '' if ($old eq $value);
 		&setvariable($key, $old, 1);
 		return 0;
 	}
@@ -2408,44 +2479,6 @@ print $stdout "-- paging users -- cursor: $cursor nofetch: $nofetch left: $count
 		}
 		print $stdout "-- sorry, no $what found for $who.\n"
 			if (!$printed);
-		return 0;
-	}
-
-	# threading
-	if (m#^/th(read)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
-		my $countmaybe = $2;
-		if (length($countmaybe)) {
-			print $stdout
-			"-- /thread does not (yet) support +count\n";
-			return 0;
-		}
-		my $code = lc($3);
-		my $post = &get_post($code);
-		if (!defined($post) || !$post->{'id'}) {
-			print $stdout "-- no such post (yet?): $code\n";
-			return 0;
-		}
-
-		my $id;
-		my $insert;
-
-		if ($post->{'repost_of'}->{'id'}) {
-			# stick this into the thread as if it were threaded,
-			# but fetch the reposted post instead.
-			$id = $post->{'repost_of'}->{'id'};
-			$insert = $post;
-		} else {
-			$id = $post->{'id'};
-			$insert = undef;
-		}
-		my $json_ref = &grabjadn(&urlp($thurl,,$id), 0, 0, 0, {
-			"type" => "thread",
-			"payload" => $id
-		}, 1);
-		if ($json_ref && ref($json_ref) eq 'ARRAY') {
-			unshift(@{ $json_ref }, $insert) if ($insert);
-		}
-		&dt_tdisplay($json_ref, 'thread', 0, $id);
 		return 0;
 	}
 
@@ -2876,23 +2909,25 @@ if(0) {
 	}
 
 	# /rg is a /reply with no @ information (thus no /v-ariant)
-	if (s#^/re?p?l?y?g ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
-		my $mode = $1;
-		my $code = lc($1);
+	if (s#^/re?p?l?y?g(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
+		my $dof = ($1 eq 'f') ? 1 : 0;
+		my $code = lc($2);
 		my $post = &get_original_post($code);
 		if (!defined($post)) {
 			print $stdout "-- no such post (yet?): $code\n";
 			return 0;
 		}
+		&add_thread($post->{'thread_id'}) if ($dof);
 		$in_reply_to = $post->{'id'};
 		$expected_post_ref = $post;
 		goto TWEETPRINT; # fugly! FUGLY!
 	}
 
 	# /vreply and DM and regular /reply
-	if (s#^/(v)?re(ply)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
+	if (s#^/(v)?re(ply)?(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
 		my $mode = $1;
-		my $code = lc($3);
+		my $dof = ($3 eq 'f') ? 1 : 0;
+		my $code = lc($4);
 		unless ($code =~ /^d[0-9][0-9]+/) { # this is a DM
 		my $post = &get_original_post($code);
 		if (!defined($post)) {
@@ -2908,6 +2943,7 @@ if(0) {
 			$_ = ".$_";
 		}
 		$readline_completion{'@'.lc($target)}++ if ($termrl);
+		&add_thread($post->{'thread_id'}) if ($dof);
 		print $stdout &wwrap("(expanded to \"$_\")");
 		print $stdout "\n";
 		goto TWEETPRINT; # fugly! FUGLY!
@@ -2934,9 +2970,10 @@ if(0) {
 		# and fall through to /dm
 	}
 	# replyall (based on @FunnelFiasco's extension)
-	if (s#^/(v)?r(eply)?(to)?a(ll)? ([zZ]?[a-zA-Z]?[0-9]+) ## && length) {
+	if (s#^/(v)?r(eply)?(to)?a(ll)?(f)? ([zZ]?[a-zA-Z]?[0-9]+) ## &&length){
 		my $mode = $1;
-		my $code = $5;
+		my $dof = ($5 eq 'f') ? 1 : 0;
+		my $code = lc($6);
 
 		# common code from /vreply
 		# we use get_post here, though, so we can include reposters
@@ -2977,6 +3014,7 @@ if(0) {
 		# add everyone in did_mentions to readline_completion
 		grep { $readline_completion{'@'.$_}++ } (keys %did_mentions)
 			if ($termrl);
+		&add_thread($post->{'thread_id'}) if ($dof);
 
 		# and fall through to post
 		print $stdout &wwrap("(expanded to \"$_\")");
@@ -3409,6 +3447,28 @@ sub common_split_post {
 }
 
 # helper functions for the command line processor.
+sub add_thread {
+	# assistant to add a thread id in a user-friendly way (usually from
+	# /ref /rgf /raf and like commands; /thf and /thunf use /add and /del).
+	my $tid = shift;
+	my $interactive = shift;
+	if ($tid =~ /[^0-9]/) {
+		print $stdout "** bogus thread ID\n" if ($interactive);
+		return;
+	}
+	if ($threads_match{$tid}) {
+		if ($interactive) {
+			&std("** you are already following thread ID #$tid\n");
+			&std("** (/p threads to list what threads you follow)\n");
+		}
+		return;
+	}
+
+	print $stdout "-- following this thread as requested (#$tid)\n";
+	my $nthreads = (length($threads)) ? "$threads,$tid" : $tid;
+	&setvariable('threads', $nthreads, 0);
+}
+
 sub add_history {
 	my $h = shift;
 
@@ -3590,10 +3650,9 @@ DONT_REFRESH:
 	if (!$synch || ($synch && $synchronous_mode && !$dm_first_time)) {
 		$k = length($notify_rate) + length($vs) + length($credlog);
 		if ($k) {
-			&send_removereadline if ($termrl);
-			print $stdout $notify_rate;
-			print $stdout $vs;
-			print $stdout $credlog;
+			&std($notify_rate);
+			&std($vs);
+			&std($credlog);
 			$wrapseq = 1;
 		}
 		$notify_rate = "";
@@ -3601,7 +3660,7 @@ DONT_REFRESH:
 		$credlog = "";
 	}
 	print P "0" if ($synchronous_mode && $interactive);
-	&send_repaint if ($termrl);
+	&sflush;
 
 	# this core loop is tricky. most signals will not restart the call.
 	# -- respond to alarms if we are ignoring our timeout.
@@ -3850,6 +3909,8 @@ EOF
 							$value eq 'auto');
 					&tracktags_makearray
 						if ($key eq 'track');
+					&threads_compile($value, 0)
+						if ($key eq 'threads');
 					&filter_compile
 						if ($key eq 'filter');
 					&notify_compile
@@ -4236,13 +4297,31 @@ sub streamevents {
 				&descape($w->{'source'}->{'username'});
 			if (!length($sou_sn) || !$filterusers_sub ||
 					!&$filterusers_sub($sou_sn)) {
-				&send_removereadline if ($termrl);
-				&$eventhandle($w);
+				&evoutstack($w);
 				$wrapseq = 1;
-				&send_repaint if ($termrl);
 			}
 		}
 	}
+}
+
+# the output stack controller. this slots in between &$handle and the actual
+# handler so that extensions need less boilerplate code in Texapp.
+sub outstack {
+	my $post_ref = shift;
+	my $class = shift;
+	my $rv = &$handle($post_ref, $class);
+	&sendnotifies($post_ref, $class);
+	return $rv;
+}
+sub dmoutstack {
+	my $dm_ref = shift;
+	my $rv = &$dmhandle($dm_ref);
+	&senddmnotifies($dm_ref) if ($sns ne $whoami);
+	return $rv;
+}
+sub evoutstack { # future expansion
+	my $event_ref = shift;
+	return &$eventhandle($event_ref);
 }
 
 # REST API support
@@ -4258,7 +4337,7 @@ sub refresh {
 	my @streams = ();
 	my $dont_roll_back_too_far = 0;
 
-	# this mixes all the post streams (timeline, hashtags, replies
+	# this mixes all the post streams (timeline, hashtags, threads, replies
 	# and lists) into a single unified data river.
 	# backload can be zero, but this will still work since &grabjadn
 	# sees a count of zero as "default."
@@ -4269,7 +4348,8 @@ sub refresh {
 	unless ($notimeline || $anonymous) {
 		# in streaming mode, use $last_id
 		# in API mode, use $fetch_id
-		my $base_json_ref = &grabjadn($url,
+		my $base_json_ref = &grabjadn(
+			($allats) ? "${url}?include_directed_posts=1" : $url,
 			($dostream) ? $last_id : $fetch_id,
 			0,
 			(($last_id) ? 250 : $fetchwanted || $backload), {
@@ -4314,6 +4394,25 @@ sub refresh {
 			if (defined($r) &&
 				ref($r) eq 'ARRAY' &&
 				scalar(@{ $r }));
+	}
+
+	# next handle threads we are subscribed to
+	if (scalar(@subscribed_threads)) {
+		my $w;
+		foreach $w (@subscribed_threads) {
+			my $r = &grabjadn(&urlp($thurl,,$w),
+				($dostream) ? $last_id : $fetch_id,
+				0,
+				(($last_id) ? 250 :
+				$fetchwanted || $backload), {
+					"type" => "thread",
+					"payload" => $w
+				}, 1);
+			push(@streams, $r)
+				if (defined($r) &&
+					ref($r) eq 'ARRAY' &&
+					scalar(@{ $r }));
+		}
 	}
 
 	# next handle hashtags and tracktags
@@ -4458,7 +4557,6 @@ if(0) {
 	# that doesn't fetch too much but includes some overlap. we can't
 	# do computations on the ID itself, because it's "opaque."
 	$fetch_id = 0 if ($last_id == 0);
-	&send_removereadline if ($termrl);
 	if ($dont_refresh_first_time) {
 		$last_id = &max($my_json_ref->[0]->{'id'}, $last_id);
 	} else {
@@ -4480,15 +4578,26 @@ if(0) {
 "-- last_id $last_id, fetch_id $fetch_id, rollback $relative_last_id\n".
 "-- (@{[ scalar(keys %id_cache) ]} cached)\n"
 		if ($verbose);
-	&send_removereadline if ($termrl);
 	&$conclude;
 	$wrapseq = 1;
-	&send_repaint if ($termrl);
 } 
 
 # convenience function for filters (see below)
 sub killtw { my $j = shift; $filtered++; $filter_next{$j->{'id'}}++
 		if ($is_background); }
+
+# asynchronous output flush
+# this must only be run by the background
+sub sflush {
+	return unless ($is_background);
+	return if ($suspend_output > 0);
+	return if (!scalar(@stream_buf));
+
+	&send_removereadline if ($termrl);
+	map { $aa = $_->[0]; print $aa "$_->[1]" } @stream_buf;
+	@stream_buf = ();
+	&send_repaint if ($termrl);
+}
 
 # handle (i.e., display) an array of posts in standard format
 sub tdisplay { # used by both synchronous /again and asynchronous refreshes
@@ -4615,25 +4724,20 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 
 			# finally store in menu code cache
 			$store_hash{$key} = $j;
-
-			sleep 5 while ($suspend_output > 0);
-			&send_removereadline if ($termrl);
 			$wrapseq++;
 
 # TODO
 # handle flag_id here
-			$printed += scalar(&$handle($j,
+			$printed += scalar(&outstack($j,
 			($class || (($id <= $relative_last_id) ? 'again' :
 				undef))));
 		}
 	}
 	$post_counter = $save_counter if ($save_counter > -1);
-	sleep 5 while ($suspend_output > 0);
 	&$exception(6,"*** warning: more posts than menu codes; truncated\n")
 		if (scalar(@{ $my_json_ref }) > $print_max);
 	if (($interactive || $verbose) && !$printed) {
-		&send_removereadline if ($termrl);
-		print $stdout "-- sorry, nothing to display.\n";
+		&std("-- sorry, nothing to display.\n");
 		$wrapseq = 1;
 	}
 	return (&max($my_json_ref->[0]->{'id'}, $last_id), $j);
@@ -4651,8 +4755,8 @@ sub dt_tdisplay {
 			my ($time, $ts1) = &$wraptime(
 $my_json_ref->[(&min($print_max,scalar(@{ $my_json_ref }))-1)]->{'created_at'});
 			my ($time, $ts2) = &$wraptime($art->{'created_at'});
-			print $stdout &wwrap(
-				"-- update covers $ts1 thru $ts2\n");
+			&std(&wwrap(
+				"-- update covers $ts1 thru $ts2\n"));
 		}
 		&$conclude;
 	}
@@ -4696,10 +4800,8 @@ sub dmrefresh {
 
 	if ($disp_max) { # an empty list can be valid
 		if ($dm_first_time) {
-			sleep 5 while ($suspend_output > 0);
-			&send_removereadline if ($termrl);
-			print $stdout
-			"-- checking for most recent direct messages:\n";
+			&std(
+			"-- checking for most recent direct messages:\n");
 			$disp_max = 2;
 			$interactive = 1;
 		}
@@ -4718,28 +4820,24 @@ sub dmrefresh {
 			$j->{'menu_select'} = $key;
 			$dm_store_hash{lc($key)} = $j;
 
-			sleep 5 while ($suspend_output > 0);
-			&send_removereadline if ($termrl);
 			$wrapseq++;
-
-			$printed += scalar(&$dmhandle($j));
+			$printed += scalar(&$dmoutstack($j));
 		}
 		$max = $my_json_ref->[0]->{'id'};
 	}
-	sleep 5 while ($suspend_output > 0);
 	if (($interactive || $verbose) && !$printed && !$dm_first_time) {
 		&send_removereadline if ($termrl);
 		print $stdout (($sent_dm)
 			? "-- you haven't sent anything yet.\n"
 			: "-- sorry, no new direct messages.\n");
 		$wrapseq = 1;
+		&send_repaint if ($termrl);
 	}
 	$last_dm = ($sent_dm) ? $orig_last_dm 
 		: &max($last_dm, $max);
 	$dm_first_time = 0 if ($last_dm || !scalar(@{ $my_json_ref }));
 	print $stdout "-- dm bookmark is $last_dm.\n" if ($verbose);
 	&$dmconclude;
-	&send_repaint if ($termrl);
 }	
 
 # post an update
@@ -5049,8 +5147,6 @@ sub standardpost {
 	my $g;
 	my $h;
 
-	$post = "[This post has been deleted.]" if (!length($post));
-
 	# wordwrap really ruins our day here, thanks a lot, T@augmentedfourth
 	# have to insinuate the ansi sequences after the string is wordwrapped
 
@@ -5068,11 +5164,16 @@ sub standardpost {
 		length($ref->{'geo'}->{'coordinates'}->[0]));
 	$sn = "%$sn" if (length($ref->{'repost_of'}->{'id'}));
 	$sn = "*$sn" if ($ref->{'source'}->{'name'} =~ /Texapp/ && $texappistas);
+	$sn = "~$sn" if ($ref->{'thread_id'} > 0 &&
+		$threads_match{$ref->{'thread_id'}});
+
 	# prepend list information, if this post originated from a list
 	$sn = "($ref->{'tag'}->{'payload'})$sn"	
 		if (length($ref->{'tag'}->{'payload'}) &&
 			$ref->{'tag'}->{'type'} eq 'list');
+
 	$post = "<$sn> $post";
+	$post = "<$sn deleted this post>" if (!length($post));
 
 	# append star count
 	$h = $ref->{'repost_of'}->{'num_stars'} || $ref->{'num_stars'};
@@ -5447,7 +5548,7 @@ sub defaultexception {
 		$message =~ s/\n/\n[$ts] /sg;
 	}
 	&send_removereadline if ($termrl);
-	$wrapseq = 1;
+	$wrapseq = 1; 
 	print $stdout "${MAGENTA}${message}${OFF}\n";
 	&send_repaint if ($termrl);
 	$laststatus = 1;
@@ -5479,8 +5580,7 @@ sub defaulthandle {
 			"${menu_select}> ")
 		: '';
 
-	print $streamout $menu_select . $dclass . $spost;
-	&sendnotifies($post_ref, $class);
+	&sto($menu_select . $dclass . $spost);
 	return 1;
 }
 sub defaultuserhandle {
@@ -5570,8 +5670,7 @@ sub defaultdmhandle {
 	my $dm_ref = shift;
 	my $sns = &descape($dm_ref->{'sender'}->{'username'});
 
-	print $streamout &standarddm($dm_ref);
-	&senddmnotifies($dm_ref) if ($sns ne $whoami);
+	&sto(&standarddm($dm_ref));
 	return 1;
 }
 
@@ -5587,7 +5686,7 @@ sub defaulteventhandle {
 	# in this version, we silently filter delete events, but your
 	# extension would still get them delivered.
 	return 1 if ($event_ref->{'delete'});
-	print $streamout &standardevent($event_ref);
+	&sto(&standardevent($event_ref));
 	return 1;
 }
 
@@ -5994,6 +6093,7 @@ sub setvariable {
 				$key =~ /^colour/);
 			&generate_shortdomain if ($key eq 'shorturl');
 			&tracktags_makearray if ($key eq 'track');
+			&threads_compile($value, 0) if ($key eq 'threads');
 			&filter_compile if ($key eq 'filter');
 			&notify_compile if ($key eq 'notifies');
 			&list_compile if ($key eq 'lists');
@@ -6130,6 +6230,30 @@ sub urlshorten {
 }
 
 ##### optimizers -- these compile into an internal format #####
+
+# compile and verify $threads
+sub threads_compile {
+	my $value = shift;
+	my $auto = shift;
+	my $w;
+	my $errors = 0;
+	%threads_match = ();
+
+	foreach $w (split(/[\s,]+/, $value)) {
+		if ($w =~ /[^0-9]/) {
+			&std("** ignoring bogus thread id #$w\n")
+				unless ($auto);
+			$errors++; next;
+		}
+		if ($threads_match{$w}++) {
+			&std("** ignoring duplicate thread id #$w\n")
+				unless ($auto);
+			$errors++; next;
+		}
+	}
+	(@subscribed_threads) = keys(%threads_match);
+	return $errors;
+}
 
 # utility routine for tquery support
 sub tracktags_tqueryurlify {
