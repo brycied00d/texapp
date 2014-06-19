@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 5;
+	$Texapp_PATCH_VERSION = 6;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	$current_rc_version = 1;
 	# this is kludgy, yes.
@@ -89,7 +89,7 @@ BEGIN {
 		superverbose texappistas
 	); %opts_comma_delimit = map { $_ => 1 } qw(
 		lists notifytype notifies filterflags filterrps filterats
-		filterusers filteratonly filterthreads threads
+		filterusers filteratonly filterthreads threads dontautoreply
 	); %opts_space_delimit = map { $_ => 1 } qw(
 		track
 	);
@@ -114,7 +114,7 @@ BEGIN {
 		statusliurl followliurl leaveliurl nostreamreplies
 		filterusers filterats filterrps filterflags alsopost
 		filteratonly nofilter favsofidurl allats threads savequit
-		filterclients filterthreads pmlength
+		filterclients filterthreads pmlength dontautoreply
 	); %opts_others = map { $_ => 1 } qw(
 		curl seven silent maxhist noansi hold status
 		daemon timestamp user anonymous script readline
@@ -620,6 +620,9 @@ $backtrack ||= &max(int(20 / &max(1, scalar(@tracktags))), 5)
 
 # compile filterflags
 &filterflags_compile;
+
+# compile dontautoreply
+&dontautoreply_compile;
 
 # compile filters
 exit(1) if (!&filter_compile);
@@ -3508,7 +3511,9 @@ if(0) {
 		}
 
 		# don't repeat the target or myself; track other mentions
-		my %did_mentions = map { $_ => 1 } (lc($target));
+		# that aren't in dontautoreply
+		my %did_mentions = map { $_ => 1 }
+			(lc($target), @dontautoreply_);
 		my $reply_post = &descape($post->{'text'}) . ' @' . $original;
 
 		#while($reply_post =~ s/\@(\w+)//) {
@@ -7503,6 +7508,7 @@ sub setvariable {
 			&filter_compile if ($key eq 'filter');
 			&notify_compile if ($key eq 'notifies');
 			&list_compile if ($key eq 'lists');
+			&dontautoreply_compile if ($key eq 'dontautoreply');
 			&filterflags_compile if ($key eq 'filterflags');
 			&filterclients_compile if ($key eq 'filterclients');
 			$filterrps_sub = &filterlist_compile(
@@ -7815,6 +7821,16 @@ print $stdout "*** syntax error in list $u/$l\n";
 		$lists = join(',', keys %already);
 	}
 	return 1;
+}
+
+# -dontautoreply compiler
+sub dontautoreply_compile {
+	my $s = $dontautoreply;
+	undef @dontautoreply_;
+	$s =~ s/^\s*['"]?\s*//;
+	$s =~ s/\s*['"]?\s*$//;
+	return if (!length($s));
+	@dontautoreply_ = split(/\s*,\s*/, $s);
 }
 
 # -filterflags compiler (replaces old -filter syntax)
@@ -9139,7 +9155,7 @@ sub encodejson {
 
 	# \n and \"
 	$x =~ s/\n/\\\\n/sg;
-	$x =~ s/"/\\\\"/g;
+	#$x =~ s/"/\\\\"/g;
 
 	# \u escape everything else, even stuff that might not need to be.
 	$x = &uforcemulti($x);
