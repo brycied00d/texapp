@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.5";
-	$Texapp_PATCH_VERSION = 2;
+	$Texapp_PATCH_VERSION = 3;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -122,6 +122,7 @@ BEGIN {
 		signals_use_posix dostream eventbuf streamallreplies
 	); %valid = (%opts_can_set, %opts_others);
 	$rc = (defined($rc) && length($rc)) ? $rc : "";
+	$rcf = '';
 	unless ($norc) {
 		$rcf = # make this global, savestate will use it.
 			($rc =~ m#^/#) ? $rc : "$ENV{'HOME'}/.texapprc${rc}";
@@ -1250,7 +1251,11 @@ if ($superverbose) {
 } else {
 	print $stdout "-- verbosity enabled.\n\n" if ($verbose);
 }
-sleep 3 unless ($silent);
+
+# XXX: consider forking this
+$pmchecked = 0;
+$last_pm_req = &pmscan(-1);
+#sleep 3 unless ($silent);
 
 # these three functions are outside of the usual API assertions for clarity.
 # they represent the main loop, which by default is the interactive console.
@@ -1567,14 +1572,15 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	#
 	####
 
-	# generically extract < parameters, but not for commands where they
-	# may be valid
+	# generically extract < parameters for leadpost/before, but not
+	# for commands where they may be valid
 	$lead_id = 0;
 	$lead_kind = '';
 	$lead_code = '';
 	if (m#^/# && !m#^//# && !m#^/me\s+#i &&
 			# /re <za0 *is* valid as long as it's just that.
 			(!m#^/v?re#i || m#^/re(plies)?\s+\<z?[a-z][0-9]$#i) &&
+				!m#^/v?r[agh]#i && # /replyall caught above
 				!m#^/pmm? #i && !m#^/list#i) {
 		if (s#\s+\<(p?z?[a-z][0-9])(\s|$)#\2#i) {
 			# length == 3 with /^p/ or length == 4: PM
@@ -1631,11 +1637,17 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 # countmaybe should work like this too
 
 	# dumper
-	if (m#^/du(mp)? ([zZ]?[a-zA-Z]?[0-9]+)$#) {
-		my $code = lc($2);
+	if (m#^/du(mp)?(f?) ([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $mode = lc($2);
+		my $code = lc($3);
 		unless ($code =~ /^[pP][zZ]?[a-zA-Z]?[0-9]+$/ # this is a PM.
 				&& $code !~ /^p[0-9]$/) {  # this is legal.
+			$oldsuperverbose = $superverbose;
+			$oldverbose = $verbose;
+			$superverbose = $verbose = 1 if ($mode eq 'f');
 			my $post = &get_post($code);
+			$superverbose = $oldsuperverbose;
+			$verbose = $oldverbose;
 			my $k;
 			my $sn;
 			my $id;
@@ -1681,9 +1693,15 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	}
 
 	# PM dumper
-	if (m#^/du(mp)? ([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
-		my $code = lc($2);
+	if (m#^/du(mp)?(f?) ([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $mode = lc($2);
+		my $code = lc($3);
+		$oldsuperverbose = $superverbose;
+		$oldverbose = $verbose;
+		$superverbose = $verbose = 1 if ($mode eq 'f');
 		my $pm = &get_pm($code);
+		$superverbose = $oldsuperverbose;
+		$verbose = $oldverbose;
 		my $k;
 		my $sn;
 		my $id;
@@ -1700,8 +1718,13 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 		my $context = undef;
 		# only fetch the context if we know we generated this,
 		# because otherwise we start doing ugly dereferencing.
+		$oldsuperverbose = $superverbose;
+		$oldverbose = $verbose;
+		$superverbose = $verbose = 1 if ($mode eq 'f');
 		$context = &get_pm_context($code)
 			unless (!defined($pm->{'_texapp_menu_select'}));
+		$superverbose = $oldsuperverbose;
+		$verbose = $oldverbose;
 	
 		foreach $superfield (@superfields) {
 			my $sfn = join('->', @{ $superfield });
@@ -1743,8 +1766,15 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	}
 
 	# evaluator
-	if (m#^/ev(al)? (.+)$#) {
-		$k = eval $2;
+	if (m#^/ev(al)?(f?) (.+)$#) {
+		my $exp = $3;
+		my $mode = lc($2);
+		$oldsuperverbose = $superverbose;
+		$oldverbose = $verbose;
+		$superverbose = $verbose = 1 if ($mode eq 'f');
+		$k = eval $exp;
+		$superverbose = $oldsuperverbose;
+		$verbose = $oldverbose;
 		print $stdout "==> ";
 		print $streamout "$k $@\n";
 		return 0;
@@ -3361,7 +3391,26 @@ if(0) {
 		return 0;
 	}
 
-	if ($_ eq '/pmscan') { &pmscan; return 0; }
+	if (s#^/pmscan\s*##) { &pmscan(0+$_); return 0; }
+	if ($_ eq '/pmcheck') {
+		unless ($pmchecked) {
+			&std(
+		"-- checking for PM activity since Texapp started up\n");
+			if (!$last_pm_req) { # this can only occur the 1st time
+				$last_pm_req = &pmscan(-1);
+				unless ($last_pm_req) {
+					&std(
+				"** having trouble checking PMs\n");
+					return 0;
+				}
+			}
+		} else {
+			&std(
+"-- checking for PM activity since the last /pmcheck or /pmscan command\n");
+		}
+		$last_pm_req = &pmrefresh(1, $last_pm_req);
+		return 0;
+	}
 
 	# /pmagain
 	if (m#^/pmag?a?i?n?(\s+\+\d+)?\s+([pP][zZ]?[a-zA-Z]?[0-9]+)$#) {
@@ -5332,10 +5381,6 @@ sub pmscan {
 	$pm_first_time = 0; # assume the fetch was successful
 	return if (!scalar(@{ $ref }));
 
-	&std(($top) ?
-	"-- most recent $top messages on all channels (/pmscan for all channels)\n"
-	: "-- all channels (/pmagain on a PM to view thread)\n");
-
 	# sort them so that the most recent are at the top, but then descending
 	# order of the ones we select.
 
@@ -5345,6 +5390,20 @@ sub pmscan {
 		:
 		sort { $a->{'id'} <=> $b->{'id'} } @{ $ref }
 	;
+	if ($top == -1) {
+		# find and return the highest ID of PMs available (so that
+		# the foreground can find out).
+		# XXX more efficient to just ask the background??
+		@outarray =
+			sort { $b->{'recent_message'}->{'id'}
+				<=> $a->{'recent_message'}->{'id'} } @{ $ref };
+		return $outarray[0]->{'recent_message'}->{'id'};
+	}
+
+	&std(($top) ?
+	"-- most recent $top channels with activity (/pmscan for all channels)\n"
+	: "-- all channels (/pmagain on a PM to view thread)\n");
+
 	@outarray = @outarray[0..($top-1)] if ($top);
 	@outarray =# ($top) ?
 		sort { $a->{'recent_message'}->{'id'}
@@ -5367,12 +5426,16 @@ sub pmscan {
 		$max = &max($max, $j->{'id'});
 	}
 	$last_pm = &max($max, $last_pm);
+	$last_pm_req = $last_pm;
+	$pmchecked = 1;
 	return;
 }
 
 # thump for PMs
+# this can be called by the foreground, too.
 sub pmrefresh {
 	my $interactive = shift;
+	my $relative_last_pm = shift;
 	# for streaming API to inject PMs it receives
 	# XXXX: we need to have this figure out how to pass it a context
 	my $my_json_ref = shift;
@@ -5380,6 +5443,8 @@ sub pmrefresh {
 	my %context_cache;
 	my $m;
 	my $max;
+
+	my $x_last_pm = $relative_last_pm || $last_pm;
 
 	if ($anonymous) {
 		print $stdout
@@ -5394,7 +5459,7 @@ sub pmrefresh {
 	return if (!$interactive && !$last_id && !$notimeline); # NOT last_pm
 
 	# do a brief /pmscan for first time start up
-	return &pmscan(2) if (!$last_pm);
+	return &pmscan(2) if (!$x_last_pm);
 
 	unless ($my_json_ref) {
 		my @messages = ();
@@ -5415,10 +5480,10 @@ sub pmrefresh {
 			print $stdout
 "-- background pmscan: channel = $cid mrm_id = $cmid\n" if ($verbose);
 
-			next unless ($cmid > $last_pm);
+			next unless ($cmid > $x_last_pm);
 
 			my $ms_ref = &grabjadn(&urlp($chanmsbyidurl,,$cid),
-				$last_pm, 0, 200);
+				$x_last_pm, 0, 200);
 			next if (ref($ms_ref) ne 'ARRAY' ||
 				!scalar(@{ $ms_ref })); # hmmm ....
 
@@ -5438,7 +5503,8 @@ sub pmrefresh {
 				&std("-- sorry, no new PMs found.\n");
 				$wrapseq = 1;
 			}
-			return;
+			$pmchecked = 1;
+			return $x_last_pm;
 		} else {
 			$my_json_ref = \@messages;
 		}
@@ -5459,10 +5525,15 @@ sub pmrefresh {
 		$max = $m->{'id'};
 		$wrapseq++;
 	}
-	$last_pm = &max($last_pm, $max);
-	print $stdout "-- pm bookmark is $last_pm.\n" if ($verbose);
+	$x_last_pm = &max($last_pm, $max);
+	unless ($relative_last_pm) {
+		$last_pm = $x_last_pm;
+		print $stdout "-- pm bookmark is $last_pm.\n" if ($verbose);
+	}
 	&$pmconclude;
-}	
+	$pmchecked = 1;
+	return $x_last_pm;
+}
 
 # post an update
 # this is a general API function that handles status updates and sending PMs.
@@ -5641,7 +5712,7 @@ ${MAGENTA}*** warning: ADN Fail Whale${OFF}
 EOF
 		return 98;
 	}
-	$lastpostid = &parsejson($return)->{'id'};
+	$lastpostid = &parsejson($return)->{'data'}->{'id'};
 	unless ($user_name_pm || $rp_id) {
 		$lastposted = $string;
 		&$postpost($string);
@@ -5703,14 +5774,16 @@ sub savestate {
 	# call all extensions with collectsave
 	&$collectsave;
 
-	# copy to backup
-	if(!open(B, ">${rcf}~") || !open(BB, "${rcf}\n")) {
-		print $stdout "*** can't save backup copy to ${rcf}~\n";
-		print $stdout "*** aborting safely: $!\n";
-		return;
+	# copy to backup, but only if it already exists
+	if (-e "$rcf") {
+		if(!open(B, ">${rcf}~") || !open(BB, "${rcf}\n")) {
+			print $stdout "*** can't save backup copy to ${rcf}~\n";
+			print $stdout "*** aborting safely: $!\n";
+			return;
+		}
+		while(<BB>) { print B $_; }
+		close(B); close(BB);
 	}
-	while(<BB>) { print B $_; }
-	close(B); close(BB);
 	
 	if (!open(B, ">$rcf")) {
 		print $stdout "*** can't save new copy to ${rcf}\n";
@@ -6701,6 +6774,7 @@ sub notifier_libnotify {
 	open(NOTIFYSEND,
 		"|$notify_tool_path -t $t -f - 'Texapp: $class'");
 	binmode(NOTIFYSEND, ":utf8") unless ($seven);
+	$text =~ s/\&/\&amp;/g;
 	print NOTIFYSEND $text;
 	close(NOTIFYSEND);
 	return 1;
@@ -6740,8 +6814,11 @@ sub get_user_by_id {
 # this is the central routine that takes a rolling post code, figures
 # out where that post is, and returns something approximating a post
 # structure (or the actual post structure itself if it can).
+$last_fetched_code = '';
+$last_fetched_ref = undef;
 sub get_post {
 	my $code = lc(shift);
+	return $last_fetched_ref if ($last_fetched_code eq $code);
 
 #TODO
 # implement querying the id_cache here. we need IPC for it, though.
@@ -6794,6 +6871,8 @@ sub get_post {
 	$w->{'created_at'} =~ s/_/ /g;
 	print $stdout "-- successfully retrieved from background\n"
 		if ($verbose);
+	$last_fetched_code = $code;
+	$last_fetched_ref = $w;
 	return $w;
 }
 
