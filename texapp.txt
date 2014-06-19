@@ -1,7 +1,7 @@
 #!/usr/bin/perl -s
 #########################################################################
 #
-# Texapp v0.5 (c)2012-3 cameron kaiser (and contributors).
+# Texapp v0.6 (c)2012-3 cameron kaiser (and contributors).
 # all rights reserved.
 # http://www.floodgap.com/software/texapp/
 #
@@ -29,8 +29,8 @@ BEGIN {
 	}
 	
 	$command_line = $0; $0 = "Texapp";
-	$Texapp_VERSION = "0.5";
-	$Texapp_PATCH_VERSION = 4;
+	$Texapp_VERSION = "0.6";
+	$Texapp_PATCH_VERSION = 0;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	# this is kludgy, yes.
 	$LANG = $ENV{'LANG'} || $ENV{'GDM_LANG'} || $ENV{'LC_CTYPE'} ||
@@ -65,14 +65,14 @@ BEGIN {
 		chanmsbyidurl url rlurl newline wrap notimeline lists
 		queryurl track colourprompt colourme notrack
 		colourpm colourreply colourwarn coloursearch colourlist idurl
-		notifies filter colourdefault backload searchhits
+		notifies filter colourdefault backload backtrack searchhits
 		nostreamreplies mentions wtrendurl atrendurl filterusers
 		filterats filterrts filteratonly filterflags nofilter
 		colourfollow colouralien allats threads
 	); %opts_urls = map {$_ => 1} qw(
 		url chanurl uurl rurl wurl uidurl rlurl update shorturl
 		globalurl homeurl chanbyidurl chanmsbyidurl
-		chansubbyidurl msbyidurl msbycidurl
+		chansubbyidurl msbyidurl msbycidurl streamurl streamsuburl
 		apibase queryurl idurl delurl favsurl
 		favurl favdelurl followurl leaveurl blockedurl
 		credurl muteurl mutedelurl friendsurl blockurl blockdelurl
@@ -81,7 +81,7 @@ BEGIN {
 		getuliurl getufliurl rturl rpsofidurl
 		statusliurl followliurl leaveliurl followersurl mutedurl
 		oauthurl oauthauthurl oauthaccurl oauthbase wtrendurl
-		atrendurl favsofidurl intsofmeurl
+		atrendurl favsofidurl intsofmeurl fridurl
 	); %opts_secret = map { $_ => 1} qw(
 		superverbose texappistas
 	); %opts_comma_delimit = map { $_ => 1 } qw(
@@ -103,11 +103,11 @@ BEGIN {
 		favurl favdelurl slowpost notifies filter colourdefault
 		colourfollow colouralien intsofmeurl blockedurl
 		followurl leaveurl mentions backload blockurl blockdelurl
-		lat long location searchhits muteurl mutedelurl woeid
+		lat long location searchhits muteurl mutedelurl woeid backtrack
 		nocounter linelength friendsurl followersurl lists mutedurl
 		modifyliurl adduliurl delliurl getliurl getlisurl getfliurl
 		creliurl delliurl deluliurl crefliurl delfliurl atrendurl
-		getuliurl getufliurl rturl rpsofidurl wtrendurl
+		getuliurl getufliurl rturl rpsofidurl wtrendurl fridurl
 		statusliurl followliurl leaveliurl nostreamreplies
 		filterusers filterats filterrts filterflags alsopost
 		filteratonly nofilter favsofidurl allats threads savequit
@@ -564,12 +564,13 @@ if (length($notifytype) && $notifytype ne '0' &&
 # set up track tags
 if (length($tquery) && $tquery ne '0') {
 	my $xtquery = &tracktags_tqueryurlify($tquery);
-	die("** custom tquery is over 140 length: $xtquery\n")
-		if (length($xtquery) > 139);
 	@trackstrings = ($xtquery);
 } else {
 	&tracktags_makearray;
 }
+# backtrack is dynamically set based on trackstrings
+$backtrack ||= &max(int(20 / &max(1, scalar(@tracktags))), 5)
+	if (!defined($backtrack)); # zero is valid!
 
 # compile filterflags
 &filterflags_compile;
@@ -639,6 +640,8 @@ $backload = 30 if (!defined($backload)); # zero is valid!
 $dont_refresh_first_time = 1 if (!$backload);
 
 $searchhits ||= 20;
+# backtrack is set after tracked terms are compiled
+
 $globalurl ||= "${apibase}/posts/stream/global";
 $homeurl ||= "${apibase}/posts/stream";
 $url ||= (($personal) ? $homeurl : $globalurl);
@@ -664,6 +667,7 @@ $mutedelurl ||= "${apibase}/users/%U/mute"; # using wdnd
 $mutedurl ||= "${apibase}/users/me/muted";
 $friendsurl ||= "${apibase}/users/%U/following";
 $followersurl ||= "${apibase}/users/%U/followers";
+$fridurl ||= "${apibase}/users/%U/following/ids";
 
 $favsurl ||= "${apibase}/users/%U/stars";
 $favurl ||= "${apibase}/posts/%I/star";
@@ -704,17 +708,17 @@ $getliurl ||= "${apibase}/lists/members.json";
 $statusliurl ||= "${apibase}/lists/statuses.json";
 # not supported yet #
 
-# streaming not supported yet #
 $streamurl ||= ($anonymous)
 	# this doesn't actually work yet.
-	? "https://stream.twitter.com/1/statuses/sample.json"
-	: "https://userstream.twitter.com/2/user.json";
+	? "YOU_GOTTA_BE_CRAZY_GOTTA_HAVE_A_REAL_NEED"
+	: "https://stream-channel.app.net/stream/user?auto_delete=1&include_html=0";
+$streamsuburl ||= "${apibase}/posts/stream/unified";
 $dostream ||= 0;
 $eventbuf ||= 0;
-# streaming not supported yet #
+
+$queryurl ||= "${apibase}/posts/search";
 
 # not supported yet #
-$queryurl ||= "${apibase}/search/posts.json";
 $wtrendurl ||= "${apibase}/trends/";
 $atrendurl ||= "${apibase}/trends/available.json";
 # not supported yet #
@@ -797,9 +801,8 @@ $baseagent = $wend;
 ##### TEXAPP OVERRIDES #####
 # these overrides set options we know will work/force options off that don't
 #
-$nostream = 1;
-$notrack = 1;
 $pause = 20 if ($pause eq 'auto');
+$nostream = 1;
 #
 # these overrides set options we know will work/force options off that don't
 ##### TEXAPP OVERRIDES #####
@@ -809,21 +812,22 @@ $pause = 20 if ($pause eq 'auto');
 # not yet supported
 if(0) {
 unless($status) {
-if (!$dostream || !$ssl || $script || $anonymous || $synch) {
+if (!$dostream || $script || $anonymous || $synch) {
 		$reason = (!$dostream) ? "(no -dostream)"
 			: ($script) ? "(-script)"
-			: (!$ssl) ? "(no SSL)"
 			: ($anonymous) ? "(-anonymous)"
 			: ($synch) ? "(-synch)"
 			: "(it's funkatron's fault)";
 		print $stdout
-	"-- Streaming API disabled $reason (Texapp will use REST API only)\n";
+	"-- User Streams disabled $reason (Texapp will use JSON API only)\n";
 		$dostream = 0;
 	} else {
-		print $stdout "-- Streaming API enabled\n";
+		print $stdout "-- User Streams enabled\n";
 
 		# streams change mentions behaviour; we get them automatically.
 		# warn the user if the current settings are suboptimal.
+#TODO
+# evaluate this
 		if ($mentions) {
 			if ($nostreamreplies) {
 				print $stdout
@@ -839,7 +843,7 @@ if (!$dostream && $streamallreplies) {
 	print $stdout
 "** warning: -streamallreplies only works in Streaming mode\n";
 }
-} # if(0)
+}
 
 # create and cache the logic for our selected user agent
 $simple_agent = "$baseagent -s -m 20";
@@ -1024,7 +1028,10 @@ for(;;) {
 		}
 	}
 	if ($rv || &is_fail_whale($data) || &is_json_error($data)) {
-		if (&is_fail_whale($data)) {
+		if ($rv == 97) {
+			print "post CANCELLED!\n";
+			exit(1);
+		} elsif (&is_fail_whale($data)) {
 			print "FAILED -- Fail Whale detected\n";
 		} elsif ($x = &is_json_error($data)) {
 			print "FAILED!\n*** server reports: \"$x\"\n";
@@ -1082,6 +1089,7 @@ if (length($credentials)) {
 	print "logged in as $whoami\n";
 	$credlog = "-- you are logged in as $whoami\n";
 }
+$connection_id = "${whoami}-${whoamid}-$$";
 
 #### BOT/DAEMON MODE STARTUP ####
 
@@ -1532,6 +1540,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	# handle variables second, in case they got in history somehow ...
 	$i = 1 if (s/^\%URL\%/$urlshort/ || s/\%URL\%$/$urlshort/);
 	$i = 1 if (s/^\%RP\%/$repost/ || s/\%RP\%$/$repost/);
+	# (%ED% and %EDRP% are handled by updatest)
 
 	# and escaped history
 	s/^\\\%/%/;
@@ -1683,6 +1692,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 				substr("$k                          ", 0, 25) .
 					" " . &descape($post->{$k}) . "\n";
 			}
+
 			# include a URL to the post per T@augmentedfourth
 			$urlshort =
 			"${http_proto}://alpha.app.net/$sn/post/$post->{'id'}";
@@ -1783,6 +1793,16 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 	# save state
 	if ($_ eq '/save') {
 		&savestate;
+		return 0;
+	}
+
+	# toggle background
+	if ($_ eq '/hold') {
+		if ($synch) {
+			&std("-- huh? you're already in -synch mode\n");
+		} else {
+			&hold;
+		}
 		return 0;
 	}
 
@@ -1917,9 +1937,7 @@ print $stdout "*** invalid UTF-8: partial delete of a wide character?\n";
 		# and fall through to set
 	}
 
-	# search api integration (originally based on T@kellyterryjones',
-	# @vielmetti's and @br3nda's patches)
-if(0) {
+	# search api integration
 	if (/^\/se(arch)?\s+(\+\d+\s+)?(.+)\s*$/) {
 		my $countmaybe = $2;
 		my $kw = $3;
@@ -1927,12 +1945,12 @@ if(0) {
 		$countmaybe += 0;
 		$countmaybe ||= $searchhits;
 		$kw = &url_oauth_sub($kw);
-		$kw = "q=$kw" if ($kw !~ /^q=/);
+		$kw = "text=$kw" if ($kw !~ /^q=/);
 
 		my $r = &grabjadn("$queryurl?$kw", 0, 0, $countmaybe, {
 					"type" => "search",
-					"payload" => $k
-				}, 1);
+					"payload" => $kw
+				}, 1, $lead_id);
 		if (defined($r) && ref($r) eq 'ARRAY' && scalar(@{ $r })) {
 			&dt_tdisplay($r, 'search');
 		} else {
@@ -1994,6 +2012,10 @@ if(0) {
 		&setvariable('track', $track, 1);
 		return 0;
 	}
+
+	# trends
+	# NOT SUPPORTED
+if(0) {
 	if (s#^/tre(nds)?\s*##) {
 		my $t;
 		my $wwoeid = (length) ? $_ : $woeid;
@@ -2003,7 +2025,6 @@ if(0) {
 		my $fr = ($wwoeid && $wwoeid ne '1') ?
 			" FOR WOEID $wwoeid" : ' GLOBALLY';
 
-#{"as_of":1237580149,"trends":{"2009-03-20 20:15:49":[{"query":"#sxsw OR SXSW",
 		if (defined($r) && ref($r) eq 'HASH') {
 			$t = $r->{'trends'};
 		} elsif (defined($r) && ref ($r) eq 'ARRAY') {
@@ -2079,6 +2100,7 @@ if(0) {
 		}
 		return 0;
 	}
+}
 
 	1 if (s/^\/#([^\s]+)/\/tron #\1/);
 	# /# command falls through to tron
@@ -2092,7 +2114,6 @@ if(0) {
 		s#^/#/set #;
 		# and fall through to set
 	}
-}
 
 	# /listoff
 	if (s/^\/list?off\s+// && s/\s*$// && length) {
@@ -2202,9 +2223,10 @@ if(0) {
 	}
 	
 	# generic form
-	if (m#^/th(read)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
-		my $countmaybe = $2;
-		my $code = $3;
+	if (m#^/th(read)?(m|af|maf|afollow|mafollow)?\s+(\+\d+\s+)?([zZ]?[a-zA-Z]?[0-9]+)$#) {
+		my $moded = $2;
+		my $countmaybe = $3;
+		my $code = $4;
 		unless ($code =~ /^P/) {
 		if ($lead_kind eq 'pm') {
 			print $stdout "-- illogical: <PMID on a post thread\n";
@@ -2229,7 +2251,9 @@ if(0) {
 			$id = $post->{'id'};
 			$insert = undef;
 		}
-		my $json_ref = &grabjadn(&urlp($thurl,,$id), 0,0,$countmaybe, {
+		my $json_ref = &grabjadn(&urlp(
+			($thurl .  (($moded =~ /m/) ? "?include_muted=1" : ''))
+				,,$id),0,0,$countmaybe, {
 			"type" => "thread",
 			"payload" => $id
 		}, 1, $lead_id);
@@ -2237,7 +2261,13 @@ if(0) {
 			unshift(@{ $json_ref }, $insert) if ($insert);
 		}
 		&dt_tdisplay($json_ref, 'thread', 0, $id);
-		return 0;
+		if ($moded =~ /af/) {
+			# /thaf or /thmaf
+			$_ = "/thf $code";
+			# and fall through
+		} else {
+			return 0;
+		}
 		}
 	}
 	if (m#^/th(read)?f(ollow)?\s+([zZ]?[a-zA-Z]?[0-9]+)$#) {
@@ -2535,7 +2565,8 @@ EOF
 		}
 		my $my_json_ref = &grabjadn(&urlp($uurl, $uid),
 			0, 0, $countmaybe, undef, 1, $lead_id);
-		&dt_tdisplay($my_json_ref, 'again');
+		&std("-- this user has not posted yet\n")
+			if (&dt_tdisplay($my_json_ref, 'again') == -1);
 		unless ($mode eq 'w' || $mode eq 'wf') {
 			return 0;
 		} # else fallthrough
@@ -2591,15 +2622,17 @@ EOF
 		return 0;
 	}
 		
+	# two-argument doesfollow
 	if (m#^/(df|doesfollow)\s+\@?([^\s]+)$#) {
 		if ($anonymous) {
 			print $stdout "-- who follows anonymous anyway?\n";
 			return 0;
 		}
+		my $uname = $2;
+		$_ = "/doesfollow $2 $whoami";
+		print $stdout "*** assuming you meant: $_\n";
 
 		# fetch the user object and ask it for follows_you
-		my $uname = $2;
-		$readline_completion{'@'.$uname}++ if ($termrl);
 		print $stdout "-- synchronous /doesfollow command for $uname\n"
 			if ($verbose);
 		my $uid = &get_user($uname);
@@ -2607,6 +2640,7 @@ EOF
 			print $stdout "-- could not find user $uname\n";
 			return 0;
 		}
+		$readline_completion{'@'.$uname}++ if ($termrl);
 		my $my_json_ref = &grabjadn(&urlp($wurl, $uid),
 			0, 0, 0, undef, 1);
 
@@ -2618,33 +2652,38 @@ EOF
 			print $stdout "-- failure getting info for $uname\n";
 		}
 		return 0;
-
-		# old code for future use
-		$_ = "/doesfollow $2 $whoami";
-		print $stdout "*** assuming you meant: $_\n";
-		# fall through to ...
 	}
 
-	# doesn't work yet #
+	# three-argument doesfollow (slower)
 	if (m#^/(df|doesfollow)\s+\@?([^\s]+)\s+\@?([^\s]+)$#) {
-#TODO
-# FIXME
-		print $stdout
-"*** sorry, three argument /doesfollow not yet supported\n";
-		return 0;
-
 		my $user_a = $2;
 		my $user_b = $3;
 		if ($user_a =~ m#/# || $user_b =~ m#/#) {
 			print $stdout "--- sorry, this won't work on lists.\n";
 			return 0;
 		}
-		my $g = &grabjadn(
-			"${frurl}?user_a=${user_a}&user_b=${user_b}", 0, 0, 0,
-				undef, 1);
-		if ($g->{'ok'}) {
-			print $stdout "--- does $user_a follow ${user_b}? => ";
-			print $streamout "$g->{'literal'}\n"
+		print $stdout
+		"-- synchronous /doesfollow command for $user_a $user_b\n"
+			if ($verbose);
+
+		# get the uid for both users so that we can use the non-paged
+		# endpoint, or this gets too complicated.
+		my $ua = &get_user($user_a);
+		if (!length($ua)) {
+			print $stdout "-- could not find user $user_a\n";
+			return 0;
+		}
+		my $ub = &get_user($user_b);
+		if (!length($ub)) {
+			print $stdout "-- could not find user $user_b\n";
+			return 0;
+		}
+		$readline_completion{'@'.$user_a}++ if ($termrl);
+		$readline_completion{'@'.$user_b}++ if ($termrl);
+		my $g = &grabjadn(&urlp($fridurl, $ua), 0, 0, 0, undef, 1);
+		if ($g && ref($g) eq 'ARRAY') {
+			&std("--- does $user_a follow ${user_b}? => ");
+			&sto((&in($ub, @{ $g })) ? "true\n" : "false\n");
 		}
 		return 0;
 	}
@@ -3307,6 +3346,9 @@ if(0) {
 			&pmthump if ($rv && $pmpause);
 			return $rv;
 		}
+
+		# if the post is to be edited, treat as /ra
+		$appendtype = 'a' if (/%ED(RP)?%$/);
 
 		# common code from /vreply
 		# we use get_post here, though, so we can include reposters
@@ -4117,6 +4159,7 @@ if ($dostream) {
 }
 
 $interactive = $previous_last_id = 0;
+$hold = 0;
 $suspend_output = -1;
 $stream_failure = 0;
 $pm_first_time = ($pmpause) ? 1 : 0;
@@ -4167,8 +4210,8 @@ DONT_REFRESH:
 	# NEEDS IT. do not allow signal handlers to execute once we have
 	# emitted data and are waiting for a command, or we can crash in
 	# later versions of Perl. finally, only even bother if we actually
-	# have stuff to print.
-	if (scalar(@stream_buf)) {
+	# have stuff to print, and if the background isn't being held.
+	if (scalar(@stream_buf) && !$hold) {
 		&output_signals;
 		&sflush; # this needs to know
 		&suppress_signals;
@@ -4191,6 +4234,7 @@ RESTART_SELECT:
 		$0 = "Texapp (select forever; $stuck_stdin re-reads)";
 		$nfound = select($rout = $rin, undef, undef, undef);
 	} else {
+		$restarttime = (time() + $effpause) if ($hold) ;
 		$actualtime = $restarttime - time();
 		print $stdout "-- select pending ($actualtime sec left)\n"
 			if ($superverbose);
@@ -4320,7 +4364,10 @@ EOF
 		$0 = "Texapp (received IPC)";
 		print $stdout "-- command received ", scalar
 				localtime, " $rout" if ($verbose);
-		if ($rout =~ /^rsga/) {
+		if ($rout =~ /^hold/) {
+			$hold ^= 1; # toggle hold flag
+			goto RESTART_SELECT;
+		} elsif ($rout =~ /^rsga/) {
 			$suspend_output = -1; # reset our status
 			goto RESTART_SELECT;
 		} elsif ($rout =~ /^pipet (..)/) {
@@ -4338,6 +4385,7 @@ EOF
 		($key->{'_texapp_longitude'})." ".
 		$key->{'_texapp_tag'}->{'type'}. " ". # NO SPACES!
 		unpack("${pack_magic}H*", $key->{'_texapp_tag'}->{'payload'}). " ".
+		$key->{'_texapp_classes'}. " ". # NO SPACES!
 		($key->{'num_replies'} || "0"). " " .
 		($key->{'num_stars'} || "0") . " " .
 		($key->{'thread_id'} || "0") . " " .
@@ -4504,7 +4552,7 @@ EOF
 			}
 		}
 	} else {
-		if ($nfound == -1) {
+		if ($nfound == -1 || $hold) {
 			# we need to restart the call. we might be waiting
 			# longer, but this is unavoidable.
 			goto RESTART_SELECT;
@@ -4691,12 +4739,20 @@ sub start_streaming {
 		# if we are testing the socket, just emit data.
 		if ($streamtest) {
 			my $c;
+			print STDOUT "\n\ncurl PID = $curlpid\n\n";
+			$superverbose = 1;
+			&grabjadn($streamsuburl."?connection_id=$connection_id");
+			$superverbose = 0;
 
 			for(;;) {
 				sysread(NURSE, $c, 1);
 				print STDOUT $c;
 			}
 		}
+
+		# start the subscription
+		&grabjadn($streamsuburl);
+
 		HELLONURSE: while(1) {
 			# restart nurse process if it/curl died
 			goto HELLOAGAINNURSE if(!$streampid);
@@ -4730,6 +4786,8 @@ sub start_streaming {
 		$0 = "Texapp (waiting $wait_time sec to connect to stream)";
 		sleep $wait_time;
 		$curlpid = 0;
+#TODO
+# fix
 		$replarg = ($streamallreplies) ? '&replies=all' : '';
 		&sigify(sub {
 			kill 9, $curlpid if ($curlpid);
@@ -4741,7 +4799,9 @@ sub start_streaming {
 			kill 9, $curlpid if ($curlpid);
 		}, qw(INT HUP TERM)); # which will cascade into SIGCHLD
 		($comm, $args, $data) = &$stringify_args($baseagent,
-			[ $streamurl, "delimited=length${replarg}" ],
+#TODO
+# needs replarg
+			[ $streamurl, "&connection_id=$connection_id" ],
 			undef, undef,
 			'-s',
 			'-A', "Texapp_Streaming/$Texapp_VERSION",
@@ -4800,11 +4860,15 @@ sub streamevents {
 		# dispatch posts
 		if ($w->{'payload'}->{'text'} && !$notimeline) {
 			# normalize the post first.
+#TODO
+# needs to be tagged at this level
 			my $payload = &normalizejson($w->{'payload'});
 			my $sid = $payload->{'id'};
 
 			$payload->{'_texapp_tag'}->{'type'} = 'timeline';
 			$payload->{'_texapp_tag'}->{'payload'} = 'stream';
+			$payload->{'_texapp_classes'} =
+				&$posttype($payload, $sn, $text);
 
 			# filter replies from streaming socket if the
 			# user requested it. use $posttype to determine
@@ -4813,8 +4877,8 @@ sub streamevents {
 				my $sn = &descape(
 					$payload->{'user'}->{'username'});
 				my $text = &descape($payload->{'text'});
-				next if (&$posttype($payload, $sn, $text) eq
-					'reply');
+				next if (&$posttype($payload, $sn, $text) =~
+					/reply/);
 			}
 
 			# finally, filter everything else and dedupe.
@@ -4979,60 +5043,28 @@ sub refresh {
 	# next handle hashtags and tracktags
 	# failure here does not abort, because search may be down independently
 	# of the main timeline.
-if(0) {
 	if (!$notrack && scalar(@trackstrings)) {
 		my $r;
 		my $k;
 		my $l;
 
 		if (!$last_id) {
-			$l = &min($backload, $searchhits);
+			$l = &min($backload, $backtrack);
 		} else {
 			$l = (($fetchwanted) ? $fetchwanted :
-				&max(100, $searchhits));
+				&max(250, $searchhits));
 		}
-		# temporarily squelch server complaints (see below)
-		$muffle_server_messages = 1 unless ($verbose);
-		foreach $k (@trackstrings) {
-		# use fetch_id here in both modes.
-		$r = &grabjadn("$queryurl?${k}&result_type=recent",
-				$fetch_id, 0, $l, {
+		unless (!$l) { foreach $k (@trackstrings) {
+			$r = &grabjadn("$queryurl?${k}", $fetch_id, 0, $l, {
 					"type" => "search",
 					"payload" => $k
 				}, 1, $lead_id);
-		# depending on the state of the search API, we might be using
-		# a bogus search ID that is too far back. so if this fails,
-		# try again with last_id, but not if we're streaming (it
-		# will always fetch zero).
-			if (!defined($r) || ref($r) ne 'ARRAY' || !$dostream) {
-		print $stdout "-- search retry $k attempted with last_id\n"
-				if ($verbose);
-		$r = &grabjadn("$queryurl?${k}&result_type=recent",
-				$last_id, 0, $l, {
-					"type" => "search",
-					"payload" => $k
-				}, 1, $lead_id);
-				$dont_roll_back_too_far = 1;
-			}
-		# or maybe not even then?
-			if (!defined($r) || ref($r) ne 'ARRAY') {
-		print $stdout "-- search retry $k attempted with zero!\n"
-				if ($verbose);
-		$r = &grabjadn("$queryurl?${k}&result_type=recent",
-				0, 0, $l, {
-					"type" => "search",
-					"payload" => $k
-				}, 1, $lead_id);
-				$dont_roll_back_too_far = 1;
-			}
 			push(@streams, $r)
 				if (defined($r) &&
 					ref($r) eq 'ARRAY' &&
 					scalar(@{ $r }));
-		}
-		$muffle_server_messages = 0;
+		} }
 	}
-}
 
 if(0) {
 	# add stream for lists we have on with /set lists, and tag it with
@@ -5092,8 +5124,11 @@ if(0) {
 				# and splice in
 				$m = -1;
 				SMIX1: for($i=0; $i<$l; $i++) {
-					next SMIX0 # it's a duplicate
-					if($my_json_ref->[$i]->{'id'} == $id);
+					if($my_json_ref->[$i]->{'id'} == $id) {
+						# it's a duplicate.
+						next SMIX0;
+					}
+						
 					if($my_json_ref->[$i]->{'id'} < $id) {
 						$m = $i;
 						last SMIX1; # got it
@@ -5121,7 +5156,7 @@ if(0) {
 	if ($dont_refresh_first_time) {
 		$last_id = &max($my_json_ref->[0]->{'id'}, $last_id);
 	} else {
-		($last_id, $crap) =
+		($last_id, $crap, $crap, $crap) =
 			&tdisplay($my_json_ref, undef, $relative_last_id);
 	}
 
@@ -5180,6 +5215,7 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 	my $save_counter = -1;
 	my $i;
 	my $j;
+	my $k;
 
 	if ($disp_max) { # null list may be valid if we get code 304
 		unless ($is_background) { # reset store hash each console
@@ -5196,6 +5232,7 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 			#	%store_hash = ();
 			#}
 		}
+		$k = $my_json_ref->[($disp_max)-1];
 		for($i = $disp_max; $i > 0; $i--) {
 			my $g = ($i-1);
 			$j = $my_json_ref->[$g];
@@ -5290,7 +5327,7 @@ sub tdisplay { # used by both synchronous /again and asynchronous refreshes
 		&std("-- sorry, nothing to display.\n");
 		$wrapseq = 1;
 	}
-	return (&max($my_json_ref->[0]->{'id'}, $last_id), $j);
+	return (&max($my_json_ref->[0]->{'id'}, $last_id), $j, $k, $printed);
 }
 sub assign_key {
 	my $post_ref = shift;
@@ -5350,16 +5387,30 @@ sub dt_tdisplay {
 	if (defined($my_json_ref)
 		&& ref($my_json_ref) eq 'ARRAY'
 			&& scalar(@{ $my_json_ref })) {
-		my ($crap, $art) = &tdisplay($my_json_ref, $class, $flag_id);
+		my ($crap, $art, $fr, $crap) =
+			&tdisplay($my_json_ref, $class, $flag_id);
 		unless ($timestamp) {
 			my ($time, $ts1) = &$wraptime(
 $my_json_ref->[(&min($print_max,scalar(@{ $my_json_ref }))-1)]->{'created_at'});
 			my ($time, $ts2) = &$wraptime($art->{'created_at'});
+			my $menu1 = $fr->{'_texapp_menu_select'};
+			my $menu2 = $art->{'_texapp_menu_select'};
+			if (!length($menu1) || !length($menu2)) {
+				&std(&wwrap(
+					"-- update covers $ts1 thru $ts2\n"));
+			} else {
+				&std(&wwrap(
+		"-- update covers $ts1 thru $ts2 (${menu1}-${menu2})\n"));
+			}
 			&std(&wwrap(
-				"-- update covers $ts1 thru $ts2\n"));
+"-- warning: no posts passed filters (/set nofilter? /unset noifttt?)\n"))
+				if (!$crap);
 		}
 		&$conclude;
+		return $crap; # printed, may be zero
 	}
+	# array was empty or bogus, indicate that
+	return -1;
 }
 
 sub pmscan {
@@ -5567,6 +5618,8 @@ sub updatest {
 	my $cid;
 	my @method = @wend;
 
+	my $needs_editor = 0;
+
 	# pm_object can either be a string (the username) or a context ref.
 	# if it's a string, that becomes user_name_pm, and the channel ID
 	# becomes "pm" (developers.app.net/docs/resources/message/lifecycle/).
@@ -5596,8 +5649,81 @@ sub updatest {
 			($rp_id) ? 'RE-post' :
 			'post';
 
+	# trigger the editor if $string ends in %ED(RP)%
+	if ($string =~ s/%ED(R?P?)%$//) {
+		my $is_rp = $1;
+		my $fn = "/tmp/texapp-".$$.time().".txt";
+		my $editor = $ENV{'EDITOR'} || "/usr/bin/vi";
+		my $ostring;
+		my $ibuf = $string;
+		my $can_fail = 1;
+		$needs_editor = 1;
+
+		if (! -x $editor) {
+			&std(
+		"-- editor $editor seems invalid; set full path to EDITOR\n");
+			return 96;
+		}
+		&std(
+		"-- warning: user likes emacs and probably has poor hygiene\n")
+			if ($editor =~ /emacs/);
+		if(!open(K, ">$fn")) {
+			&std("-- unable to create $fn: $!\n");
+			return 96;
+		}
+		$ibuf .= (length($ibuf)) ? " $repost" : "$repost"
+			if ($is_rp eq 'RP');
+		$ibuf .= "\n" if (length($ibuf) && $ibuf !~ /\n$/s);
+		print K $ibuf if (length($ibuf));
+		$ostring = $ibuf;
+		close(K);
+
+		while ($can_fail) {
+			# hold the background during editing
+			&hold;
+			system($editor, $fn);
+			&hold;
+
+			if(!open(K, "$fn")) {
+				&std("-- unable to read back $fn: $!\n");
+				return 96;
+			}
+			$string = '';
+			while(<K>) {
+				$string .= $_;
+			}
+			close(K);
+			$can_fail = 0;
+
+			# the editor has to enforce line length
+			if (length($string) > $linelength) {
+				&std(
+	"-- too long: @{[ length($string) ]} characters, max $linelength\n");
+				$string = '';
+				$can_fail = 1;
+			}
+			if ($can_fail) {
+				my $answer = lc(&linein(
+			"-- edit again? (only y or Y is affirmative):"));
+				$can_fail = 0 unless ($answer eq 'y');
+			}
+		}
+		unlink($fn) || &std("-- warning: couldn't remove $fn: $!\n");
+		if ($ostring eq $string) {
+			&std("-- no change detected, not posting\n");
+			return 97;
+		}
+		$string =~ s/\s+$//;
+		chomp($string);
+		$string =~ s/\s+$//;
+		if (!length($string)) {
+			&std("-- editor returned nothing, not posting\n");
+			return 97;
+		}
+	}
+
 	# "the pastebrake"
-	if (!$slowpost && !$verify && !$script) {
+	if (!$slowpost && !$verify && !$script && !$needs_editor) {
 		if ((time() - $postbreak_time) < 5) {
 			$postbreak_count++;
 			if ($postbreak_count == 3) {
@@ -5617,21 +5743,6 @@ sub updatest {
 	my $payload = 'text';
 	$string = &$prepost($string) unless ($user_name_pm || $rp_id);
 
-	# YES, you *can* verify and slowpost. I thought about this and I
-	# think I want to allow it.
-	if ($verify && !$status) {
-		my $answer;
-
-		print $stdout
-			&wwrap("-- verify you want to $verb: \"$string\"\n");
-		$answer = lc(&linein(
-			"-- send to server? (only y or Y is affirmative):"));
-		if ($answer ne 'y') {
-			print $stdout "-- ok, NOT sent to server.\n";
-			return 97;
-		}
-	}
-
 	unless ($rp_id) {
 		$urle = '';
 		foreach $i (unpack("${pack_magic}C*", $string)) {
@@ -5647,9 +5758,10 @@ sub updatest {
 
 	my $i = '';
 	$i .= "reply_to=${in_reply_to}&" if ($in_reply_to > 0);
+	my $geo_anno = '';
 	if (!$rp_id && defined $lat && defined $long && $location) {
 		print $stdout "-- using lat/long: ($lat, $long)\n";
-		$i .= "lat=${lat}&long=${long}&";
+		$geo_anno = ", \"annotations\":[{ \"type\": \"net.app.core.geolocation\", \"value\": { \"latitude\": $lat, \"longitude\": $long }}]";
 	} elsif ((defined $lat || defined $long) && $location && !$rp_id) {
 		print $stdout
 		"-- warning: incomplete location ($lat, $long) ignored\n";
@@ -5657,19 +5769,40 @@ sub updatest {
 	$i .= "${payload}=${urle}" unless ($rp_id);
 	$i .= "id=$rp_id" if ($rp_id);
 
+	# YES, you *can* verify and slowpost. I thought about this and I
+	# think I want to allow it.
+	if ($verify && !$status) {
+		my $answer;
+
+		print $stdout
+			&wwrap("-- verify you want to $verb: \"$string\"\n");
+		$answer = lc(&linein(
+			"-- send to server? (only y or Y is affirmative):"));
+		if ($answer ne 'y') {
+			print $stdout "-- ok, NOT sent to server.\n";
+			return 97;
+		}
+	}
+
 	if ($user_name_pm) {
 		@method = @wjnd;
 		my $ustring = &escape_qq($string);
 		if ($cid eq 'pm') {
 			# this is already in the right format.
 			chomp($i = <<"EOF");
-{ "text" : "$ustring", "destinations" : ["\@${json_user_pm}"]}
+{ "text" : "$ustring", "destinations" : ["\@${json_user_pm}"]${geo_anno}}
 EOF
 		} else {
 			chomp($i = <<"EOF");
-{ "text" : "$ustring" }
+{ "text" : "$ustring" ${geo_anno}}
 EOF
 		}
+	} elsif (length($geo_anno)) {
+		@method = @wjnd;
+		my $ustring = &escape_qq($string);
+		chomp($i = <<"EOF");
+{ "text" : "$ustring" ${geo_anno}}
+EOF
 	}
 
 	$slowpost += 0; if ($slowpost && !$script && !$status && !$silent) {
@@ -5984,10 +6117,38 @@ sub standardpost {
 	# wordwrap really ruins our day here, thanks a lot, T@augmentedfourth
 	# have to insinuate the ansi sequences after the string is wordwrapped
 
-	$g = $colour = ${'CC' . scalar(&$posttype($ref, $sn, $post)) }
-		unless ($nocolour);
-	$colour = $OFF . $colour
-		unless ($nocolour);
+	# figure out the desired colour based on the classes provided. some
+	# colours take priority over others. otherwise, pick the first
+	# colour that's actually a colour.
+	unless ($nocolour) {
+		$colour = $ref->{'_texapp_classes'};
+
+		# test for major classes: me, reply
+		if ($colour =~ /me/) {
+			$colour = $CCme;
+		} elsif ($colour =~ /reply/) {
+			$colour = $CCreply;
+		} elsif ($colour =~ /follow/) {
+			$colour = $CCfollow;
+		} else {
+			my $w;
+			my $thecolour = $CCdefault; # default major class
+
+			# try to find the first colour that is NOT "OFF."
+			FIRSTCOLOUR: foreach $w (split(/\//, $colour)) {
+				if (${"CC$w"} ne $OFF && length(${"CC$w"})) {
+					$thecolour = ${"CC$w"};
+					last;
+				}
+			}
+			$colour = $thecolour;
+		}
+
+		$g = $colour;
+		$colour = $OFF . $colour;
+	} else {
+		$g = $colour = '';
+	}
 
 	# prepend screen name "badges"
 	$sn = "\@$sn" if ($ref->{'reply_to'} > 0);
@@ -6528,13 +6689,17 @@ sub userline { # used by both $userhandle and /whois
 		$user_id_cache{$user_cache{$k}} = $k;
 	}
 
+	my $species = ucfirst($my_json_ref->{'type'});
+	$species = (length($species) && $species ne 'Human') ?
+		" ($species)" : "";
+
 	my $muted =
 		($my_json_ref->{'you_blocked'} eq 'true') ?
 		"${EM}(Blocked)${OFF} " : 
 		($my_json_ref->{'you_muted'} eq 'true') ?
 		"${EM}(Muted)${OFF} " : '';
 	print $fh <<"EOF"; 
-${CCprompt}@{[ &descape($my_json_ref->{'name'}) ]}${OFF} (@{[ &descape($my_json_ref->{'username'}) ]}) (f:$my_json_ref->{'counts'}->{'following'}/$my_json_ref->{'counts'}->{'followers'}) (p:$my_json_ref->{'counts'}->{'posts'}) ${muted}
+${CCprompt}@{[ &descape($my_json_ref->{'name'}) ]}${OFF} (@{[ &descape($my_json_ref->{'username'}) ]}) (f:$my_json_ref->{'counts'}->{'following'}/$my_json_ref->{'counts'}->{'followers'}) (p:$my_json_ref->{'counts'}->{'posts'})${species} ${muted}
 EOF
 	return;
 }
@@ -6547,10 +6712,18 @@ sub sendnotifies { # this is a default subroutine of a sort, right?
 
 	# interactive? first time?
 	unless (length($class) || !$last_id || !length($post)) {
-		$class = scalar(&$posttype($post_ref, $sn, $post));
-		&notifytype_dispatch($class,
-				&standardpost($post_ref, 1), $post_ref)
-			if ($notify_list{$class});
+		my $subclass;
+		$class = $post_ref->{'_texapp_classes'};
+
+		NOTIFYNOTIFY: foreach $subclass (split(/\//, $class)) {
+			if ($notify_list{$subclass}) {
+				# only send one notify (the first one)
+				# but include the entire list of classes
+				&notifytype_dispatch($class,
+					&standardpost($post_ref, 1), $post_ref)
+				; last NOTIFYNOTIFY;
+			}
+		}
 	}
 }
 
@@ -6559,31 +6732,49 @@ sub defaultposttype {
 	my $ref = shift;
 	my $sn = shift;
 	my $post = shift;
+	my $subclasses = '';
+	my $h;
 
-	# br3nda's and smb's modified colour patch
+	# fast path: me never has subclasses
 	unless ($anonymous) {
 		if (lc($sn) eq $whoami) {
 			# if it's me speaking, colour the line yellow
-			return 'me';
-		} elsif ($post =~ /\@$whoami(\b|$)/i) {
+			return 'me'; # this never has subclasses
+		}
+	}
+	$subclasses = ($ref->{'user'}->{'you_follow'} eq 'true' ||
+			$ref->{'user'}->{'is_follower'} eq 'true')
+		? '/follow'
+		: '/alien';
+
+	# add on other subclasses
+	# identify if there are search terms here (causes less problems
+	# than trying to fix the payload in &refresh)
+	if(scalar(@tracktags)) {
+		POSTTYPETTRACKTAG: foreach $h (@tracktags) {
+			if ($post =~ /(^|[^a-zA-Z0-9])($h)([^a-zA-Z0-9]|$)/i) {
+				$subclasses .= '/search';
+				last POSTTYPETTRACKTAG;
+			}
+		}
+	}
+	$subclasses .= '/subthread'
+		if ($ref->{'_texapp_tag'}->{'type'} eq 'subthread');
+	$subclasses .= '/list' if ($ref->{'_texapp_tag'}->{'type'} eq 'list');
+
+	# now replies: second highest precedence
+	unless ($anonymous) {
+		if ($post =~ /\@$whoami(\b|$)/i) {
 			# if I'm in the post, colour red
-			return 'reply';
+			return "reply$subclasses";
 		} 
 	}
-	#if ($ref->{'class'} eq 'search') { # anonymous allows this too
-	#	# if this is a search result, colour cyan
-	#	return 'search';
-	#}
-	#if ($ref->{'_texapp_tag'}->{'type'} eq 'list') { # anonymous allows this too
-	#	return 'list';
-	#}
-	#return 'default' if ($ref->{'_texapp_tag'}->{'type'} ne 'timeline');
-
-	# tracked threads should have a class
-	return 'subthread' if ($ref->{'_texapp_tag'}->{'type'} eq 'subthread');
-
-	return 'follow' if ($ref->{'user'}->{'you_follow'} eq 'true');
-	return 'alien';
+	
+	# not me or reply
+	# if we have subclasses, promote them
+	return (length($subclasses)) ? substr($subclasses, 1) :
+		# we don't, return default. in practice, this won't appear.
+		"default";
 }
 
 sub defaultconclude {
@@ -6876,12 +7067,14 @@ sub get_post {
 		$w->{'_texapp_longitude'},
 		$w->{'_texapp_tag'}->{'type'},
 		$w->{'_texapp_tag'}->{'payload'},
+		$w->{'_texapp_classes'},
 		$w->{'num_replies'},
 		$w->{'num_stars'},
 		$w->{'thread_id'},
 		$w->{'num_reposts'},
 		$w->{'user'}->{'username'}, $w->{'created_at'},
-			$l) = split(/\s/, $k, 16);
+	##### HEY YOU! UPDATE THE NUMBER BELOW IF YOU ADD IPC FIELDS! #####
+			$l) = split(/\s/, $k, 17);
 	($w->{'source'}->{'name'}, $k) = split(/\|/, $l, 2);
 	$w->{'text'} = pack("H*", $k);
 	$w->{'_texapp_tag'}->{'payload'} = pack("H*", $w->{'_texapp_tag'}->{'payload'});
@@ -7039,6 +7232,7 @@ sub sendbackgroundkey {
 	print C substr(unpack("${pack_magic}H*", $value).$space_pad, 0, 1024);
 }
 
+sub hold { print C "hold---------------\n" unless ($synch); &sync_semaphore; }
 sub thump { print C "update-------------\n"; &sync_semaphore; }
 sub sthump { print C "updateno-----------\n"; &sync_semaphore; }
 sub pmthump { print C "pmthump------------\n"; &sync_semaphore; }
@@ -7273,7 +7467,7 @@ sub tracktags_tqueryurlify {
 	my $value = shift;
 	$value =~ s/([^ a-z0-9A-Z_])/"%".unpack("H2",$1)/eg;
 	$value =~ s/\s/+/g;
-	$value = "q=$value" if ($value !~ /^q=/);
+	$value = "text=$value" if ($value !~ /=/);
 	return $value;
 }
 
@@ -7321,27 +7515,31 @@ sub tracktags_makearray {
 	$track = join(' ', @tracktags);
 	&tracktags_compile;
 }	
-# run when array is altered (based on @kellyterryjones' code)
+# run when array is altered (based on T@kellyterryjones' code)
 sub tracktags_compile {
 	@trackstrings = ();
 	return if (!scalar(@tracktags));
 
 	my $k;
 	my $l = '';
-	# need to limit track tags to a certain number of pieces
+	# limit track tags to a certain number of pieces
 	TAGBAG: foreach $k (@tracktags) {
-		if (length($k) > 130) { # I mean, really
-			print $stdout
-				"-- warning: track tag \"$k\" is TOO LONG\n";
-			next TAGBAG;
-		}
+		push(@trackstrings, "text=".&url_oauth_sub($k))
+			if (length($k));
+	}
+	return;
+
+	if(0) {
+		# when ADN supports logical operators, use this code for
+		# the loop
 		if (length($l)+length($k) > 150) { # balance of size/querytime
-			push(@trackstrings, "q=".&url_oauth_sub($l));
+			push(@trackstrings, "text=".&url_oauth_sub($l))
+				unless (!length($l));
 			$l = '';
 		}
 		$l = (length($l)) ? "${l} OR ${k}" : "${k}";
 	}
-	push(@trackstrings, "q=".&url_oauth_sub($l)) if (length($l));
+	push(@trackstrings, "text=".&url_oauth_sub($l)) if (length($l));
 }
 
 # notification multidispatch
@@ -7931,7 +8129,7 @@ sub grabjadn {
 			($my_json_ref->{'data'}->{'you_reposted'} ||
 				$my_json_ref->{'data'}->{'channel_id'})) {
 				$my_json_ref->{'data'} =
-				&normalizejson($my_json_ref->{'data'});
+					&normalizejson($my_json_ref->{'data'});
 		}
 		if (ref($my_json_ref->{'data'}) eq 'ARRAY') {
 			my $i;
@@ -7956,11 +8154,12 @@ sub grabjadn {
 # what this currently does is the following gyrations:
 # - if there is no id, see if we can convert id into one. if
 #   there is loss of precision, warn the user. same for
-#   reply_to.
+#   reply_to. (this is currently disabled)
 # - if the calling function has specified a tag, tag the posts, since
 #   we're iterating through them anyway. the tag should be a hashref payload.
 # - if the post is a repost, unwrap it so that the full post text is
 #   revealed (unless -nonewrps).
+# - figure out all post classes using &$posttype, if this appears to be posts.
 sub normalizejson {
 	my $i = shift;
 	my $kludge_search_api_adjust = shift;
@@ -7968,7 +8167,13 @@ sub normalizejson {
 	my $rt;
 
 	# tag the post
-	$i->{'_texapp_tag'} = $tag if (defined($tag));
+	if (defined($tag)) {
+		# copy the tag, assuming that _tag and _payload are scalar.
+		# this avoids a lot of problems with reference aliasing!
+		# force new strings to be made as well.
+		$i->{'_texapp_tag'}->{'type'} = "$tag->{'type'}";
+		$i->{'_texapp_tag'}->{'payload'} = "$tag->{'payload'}";
+	}
 
 	# set entities flag for performance/marking
 	my $haz_entilinks = $i->{'entities'}->{'links'};
@@ -7987,6 +8192,15 @@ sub normalizejson {
 					$a_ref->{'value'}->{'longitude'};
 			}
 		}
+	}
+
+	# do things that only apply to posts.
+	if ($i->{'thread_id'}) {
+
+		# precompute classes since we have a full JSON object.
+		$i->{'_texapp_classes'} =
+			&$posttype($i, &descape($i->{'user'}->{'username'}),
+				&descape($i->{'text'}));
 	}
 
 if(0) {
@@ -8096,7 +8310,7 @@ sub parsejson {
 
 	# and then we're going to turn the inline ones all back except
 	# ssqq, which we'll do last so that our syntax checker still works.
-	$data =~ s/$bbqqmask/\\\\/g;
+	$data =~ s/$bbqqmask/\\\\\\\\/g; # yes, eight. descape reverses this.
 	$data =~ s/$ddqqmask/"/g;
 
 	print $stdout "$data\n" if ($superverbose);
@@ -8310,6 +8524,17 @@ sub descape {
 	my $x = shift;
 	my $mode = shift;
 
+	# handle backslashed entities and newlines
+	if ($newline) {
+		$x =~ s/\\r//sg;
+		if ($x =~ /\\n/) {
+			# add a leading newline for ASCII art and such things
+			my $nlc = 0;
+			++$nlc while $x =~ s/\\n/\n/s;
+			$x = "\n$x" if ($nlc > 2);
+		}
+	}
+	$x =~ s#\\\\#\\#g;
 	$x =~ s#\\/#/#g;
 
 	# try to do something sensible with unicode
@@ -8356,10 +8581,6 @@ s/\\u([dD][890abAB][0-9a-fA-F]{2})\\u([dD][cdefCDEF][0-9a-fA-F]{2})/&deutf16($1,
 		$x =~ s/\&lt;/\</g;
 		$x =~ s/\&gt;/\>/g;
 		$x =~ s/\&amp;/\&/g;
-	}
-	if ($newline) {
-		$x =~ s/\\n/\n/sg;
-		$x =~ s/\\r//sg;
 	}
 	return $x;
 }
