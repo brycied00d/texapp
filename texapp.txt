@@ -30,7 +30,7 @@ BEGIN {
 	
 	$command_line = $0; $0 = "Texapp";
 	$Texapp_VERSION = "0.6";
-	$Texapp_PATCH_VERSION = 1;
+	$Texapp_PATCH_VERSION = 2;
 	$Texapp_RC_NUMBER = 0; # non-zero for release candidate
 	$current_rc_version = 1;
 	# this is kludgy, yes.
@@ -112,7 +112,7 @@ BEGIN {
 		statusliurl followliurl leaveliurl nostreamreplies
 		filterusers filterats filterrps filterflags alsopost
 		filteratonly nofilter favsofidurl allats threads savequit
-		filterclients filterthreads
+		filterclients filterthreads pmlength
 	); %opts_others = map { $_ => 1 } qw(
 		curl seven silent maxhist noansi hold status
 		daemon timestamp user anonymous script readline
@@ -677,6 +677,7 @@ $lat ||= undef;
 $long ||= undef;
 $location ||= 0;
 $linelength ||= 256;
+$pmlength ||= 2048;
 $oauthbase ||= $apibase || "${http_proto}://alpha-api.app.net/";
 # this needs to be AFTER oauthbase so that apibase can set oauthbase.
 $apibase ||= "${http_proto}://alpha-api.app.net/stream/0";
@@ -1046,7 +1047,7 @@ for(;;) {
 "or use -autosplit={word,char,cut}.\n")
 		if (length($status) > $linelength && !$autosplit);
 	($status, $next) = &csplit($status, ($autosplit eq 'char' ||
-			$autosplit eq 'cut') ? 1 : 0)
+			$autosplit eq 'cut') ? 1 : 0, $linelength)
 		if (!length($next));
 	if ($autosplit eq 'cut' && length($next)) {
 		print "-- warning: input autotrimmed to $linelength bytes\n";
@@ -4024,6 +4025,7 @@ sub common_split_post {
 	my $pm_user = shift;
 	my $pm_lead = '';
 	my $pm_context = $pm_user;
+	my $maxlength = $linelength;
 	
 	# if pm_user is a hashref, it's probably an annotated context from
 	# the /reply command. try to unwrap it.
@@ -4054,10 +4056,11 @@ sub common_split_post {
 		# it's not a context or arrayref, just a user name.
 		$pm_lead = "/pm $pm_user ";
 	}
+	$maxlength = (length($pm_lead)) ? $pmlength : $linelength;
 	my $ol = "$pm_lead$k";
 
 	my (@poststack) = &csplit($k, ($autosplit eq 'char' ||
-		$autosplit eq 'cut') ? 1 : 0);
+		$autosplit eq 'cut') ? 1 : 0, $maxlength);
 	my $m = shift(@poststack);
 	if (scalar(@poststack)) {
 		$l = "$pm_lead$m";
@@ -4070,7 +4073,7 @@ sub common_split_post {
 			return 0;
 		}
 		print $stdout &wwrap(
-			"*** over $linelength; autosplitting to \"$l\"\n");
+			"*** over $maxlength; autosplitting to \"$l\"\n");
 	}
 	# there was an error; stop autosplit, restore original command
 	if (&updatest($m, 1, $in_reply_to, $pm_context)) {
@@ -4083,7 +4086,7 @@ sub common_split_post {
 		&add_history($l);
 		print $stdout &wwrap("*** next part is ready: \"$l\"\n");
 		print $stdout "*** (this will also be automatically split)\n"
-			if (length($k) > $linelength);
+			if (length($k) > $maxlength);
 		print $stdout
 		"*** to send this next portion, use %%.\n";
 	}
@@ -5747,6 +5750,7 @@ sub updatest {
 	my $json_user_pm;
 	my $cid;
 	my @method = @wend;
+	my $maxlength = $linelength;
 
 	my $needs_editor = 0;
 
@@ -5763,16 +5767,19 @@ sub updatest {
 		$json_user_pm = join('", "@',
 			&users_not_me(@{ $pm_object->{'users'} }));
 		$cid = $pm_object->{'id'};
+		$maxlength = $pmlength;
 	} elsif(ref($pm_object) eq 'ARRAY') {
 		# it's a list of names
 		$user_name_pm = join(' ', @{ $pm_object });
 		$json_user_pm = join('", "@',
 			&users_not_me(@{ $pm_object }));
 		$cid = 'pm';
+		$maxlength = $pmlength;
 	} else {
 		# it's a user name
 		$user_name_pm = $json_user_pm = $pm_object;
 		$cid = 'pm';
+		$maxlength = $pmlength if (length($user_name_pm));
 	}
 
 	my $verb = (length($user_name_pm)) ? "PM $user_name_pm" :
@@ -5826,9 +5833,9 @@ sub updatest {
 			$can_fail = 0;
 
 			# the editor has to enforce line length
-			if (length($string) > $linelength) {
+			if (length($string) > $maxlength) {
 				&std(
-	"-- too long: @{[ length($string) ]} characters, max $linelength\n");
+	"-- too long: @{[ length($string) ]} characters, max $maxlength\n");
 				$string = '';
 				$can_fail = 1;
 			}
@@ -8865,6 +8872,7 @@ sub cosplit {
         # we let Perl do the work since it internally knows where they end.
 	my $orig_k = shift;
 	my $mode = shift;
+	my $maxlength = shift || $linelength;
 	my $lengthsub = shift;
 	my $z;
 	my @m;
@@ -8879,7 +8887,7 @@ sub cosplit {
 	$k =~ s/\s+$//;
 	$k =~ s/\s+/ /g;
 	$z = &$lengthsub($k);
-	return ($k) if ($z <= $linelength); # also handles the trivial case
+	return ($k) if ($z <= $maxlength); # also handles the trivial case
 
 	# this needs to be reply-aware, so we put @'s at the beginning of
 	# the second half too (and also Ps for PMs)
@@ -8887,8 +8895,8 @@ sub cosplit {
 			$k =~ s/^(P\s+[^\s]+\s)\s*//);  # we have r/a, so while
 	$k = "$r$k";
 
-	my $i = $linelength;
-	$i-- while(($z = &$lengthsub($q = substr($k, 0, $i))) > $linelength);
+	my $i = $maxlength;
+	$i-- while(($z = &$lengthsub($q = substr($k, 0, $i))) > $maxlength);
 	$m = substr($k, $i);
 
 	# if we just wanted split-on-byte, return now (mode = 1)
@@ -8907,7 +8915,7 @@ sub cosplit {
 		return (&cosplit($orig_k, 1, $lengthsub))
 			if (!length($q) && !$mode);
 			# it totally failed. fall back on charsplit.
-		if (&$lengthsub($q) < $linelength) {
+		if (&$lengthsub($q) < $maxlength) {
 			$m =~ s/^\s+//;
 			return($q, "$r$m")
 		}
@@ -9048,6 +9056,7 @@ sub url_oauth_sub {
 sub escape_qq {
 	my $x = shift;
 	$x =~ s/\\/\\\\/g;
+	$x =~ s/\n/\\n/sg;
 	$x =~ s/"/\\"/g;
 	return $x;
 }
